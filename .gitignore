@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+*.egg-info/
+
+# Node
+node_modules/
+dist/
+*.tsbuildinfo
+
+# Data / artifacts
+data/**
+!data/.gitkeep
+
+# Environment
+.env
+.env.local
+
+# OS
+.DS_Store

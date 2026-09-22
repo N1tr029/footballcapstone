@@ -1,10 +1,11 @@
-# GRIDIRON
+# Football Capstone
 
 **See the play. Understand the mistake. Relive the alternative.**
 
-GRIDIRON ingests American football game data, finds the plays that decided the
-outcome, explains what went wrong in the numbers that were actually on the field —
-and then simulates what would have happened if the call had been different.
+Football Capstone ingests American football game data, finds the plays that
+decided the outcome, explains what went wrong in the numbers that were actually
+on the field — and then simulates what would have happened if the call had been
+different.
 
 The flagship feature is **WHAT IF?**
 
@@ -12,15 +13,16 @@ The flagship feature is **WHAT IF?**
 > six-man box that rotated late; the backside end crashed and you were tackled a
 > yard short. The punt gave them the ball on their 41.
 >
-> *Generate What If* → GRIDIRON reconstructs the game state at the snap, runs the
-> alternative call through a play-outcome model against three plausible defensive
-> responses, and shows you what the drive looks like on the other side.
+> *Generate What If* → Football Capstone reconstructs the game state at the
+> snap, runs the alternative call through a play-outcome model against three
+> plausible defensive responses, and shows you what the drive looks like on the
+> other side.
 >
 > **+0.11 win probability. 64% chance the conversion sticks.** Labelled, every
 > frame, as a simulation.
 
-This is the football sibling of APEX, which does the same thing for
-Formula 1 and sim racing: same pipeline shape, different sport.
+This is the football sibling of APEX, which does the same thing for Formula 1
+and sim racing: same pipeline shape, different sport.
 
 ---
 

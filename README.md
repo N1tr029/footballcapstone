@@ -104,4 +104,5 @@ Capstone project.
 
 ## Further reading
 
+- [docs/roles.md](docs/roles.md) — how the work splits across the five of us
 - [docs/architecture.md](docs/architecture.md)

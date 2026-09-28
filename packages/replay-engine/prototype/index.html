@@ -20,7 +20,7 @@
     --gold: #F5C451;
     --paper: #F6F3EC;
     --paper-ink: #171C1F;
-    --stage-max: 430px;
+    --stage-max: 480px;
   }
 
   body {
@@ -32,7 +32,7 @@
     padding-block: 28px 56px;
   }
 
-  .wrap { max-width: 720px; margin: 0 auto; display: flex; flex-direction: column; gap: 22px; }
+  .wrap { max-width: 1000px; margin: 0 auto; display: flex; flex-direction: column; gap: 22px; }
 
   /* ---- masthead ---------------------------------------------------- */
   .masthead { display: flex; flex-direction: column; gap: 5px; }
@@ -55,7 +55,21 @@
     background: #05090C; border: 1px solid var(--line);
     box-shadow: 0 24px 60px rgba(0,0,0,.55);
   }
-  .stage.tactical { aspect-ratio: 4 / 5; }
+  .stage.tactical { max-width: 100%; aspect-ratio: 4 / 5; }
+
+  /* Full-size: the stage takes the whole panel and the controls float over it. */
+  .stage.expanded {
+    position: fixed; inset: 10px; width: auto; max-width: none; max-height: none;
+    aspect-ratio: auto; z-index: 60; border-radius: 12px;
+  }
+  .wrap.expanded .phases, .wrap.expanded .transport {
+    position: fixed; left: 50%; transform: translateX(-50%); z-index: 61;
+    width: min(560px, 92vw); max-width: none;
+    background: rgba(7,12,16,.78); padding: 8px; border-radius: 10px;
+    backdrop-filter: blur(4px);
+  }
+  .wrap.expanded .phases { bottom: 136px; }
+  .wrap.expanded .transport { bottom: 22px; }
   .stage canvas { display: block; width: 100%; height: 100%; }
 
   /* orientation hint, shown only in the top-down view */
@@ -120,6 +134,8 @@
   }
 
   /* ---- transport --------------------------------------------------- */
+  .wrap.wide .phases, .wrap.wide .transport { max-width: 100%; }
+
   .transport {
     width: 100%; max-width: var(--stage-max); margin: 0 auto;
     display: flex; flex-direction: column; gap: 10px;
@@ -153,7 +169,15 @@
   button[aria-pressed="true"], button.primary {
     color: #06231F; background: var(--eagles-lit); border-color: var(--eagles-lit);
   }
-  button:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
+  button:focus-visible, select:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
+
+  select {
+    font-family: 'Barlow Condensed', 'Arial Narrow', sans-serif; font-weight: 600;
+    font-size: 12px; letter-spacing: .06em; text-transform: uppercase;
+    color: var(--ink-dim); background: var(--panel); border: 1px solid var(--line);
+    border-radius: 6px; padding: 7px 10px; cursor: pointer; max-width: 210px;
+  }
+  select.on { color: #06231F; background: var(--eagles-lit); border-color: var(--eagles-lit); }
   .spacer { flex: 1; }
 
   /* ---- notes ------------------------------------------------------- */
@@ -216,6 +240,10 @@
       <button class="cam" type="button" data-cam="offense">Offense</button>
       <button class="cam" type="button" data-cam="defense">Defense</button>
       <button class="cam" type="button" data-cam="top">Top</button>
+      <select id="pov" aria-label="Watch the play through one player's eyes">
+        <option value="">Player view&hellip;</option>
+      </select>
+      <button id="expandBtn" type="button">Expand</button>
     </div>
   </div>
 
@@ -427,7 +455,7 @@
     var grp = new THREE.Group();
     var jersey = new THREE.MeshLambertMaterial({ color: kit.jersey });
     var pants = new THREE.MeshLambertMaterial({ color: kit.pants });
-    var helmet = new THREE.MeshLambertMaterial({ color: star ? kit.trim : kit.helmet });
+    var helmet = new THREE.MeshLambertMaterial({ color: kit.helmet });
 
     var shadow = new THREE.Mesh(new THREE.CircleGeometry(0.44, 18), SHADOW);
     shadow.rotation.x = -Math.PI / 2; shadow.position.y = 0.015; grp.add(shadow);
@@ -484,9 +512,13 @@
   function addSide(list, kit, isOffense) {
     list.forEach(function (p) {
       var mesh = buildPlayer(kit, !!p.star);
-      if (p.star) mesh.add(nameTag(p.num ? p.name + ' ' + p.num : p.name));
+      var tag = null;
+      if (p.star) {
+        tag = nameTag(p.num ? p.name + ' ' + p.num : p.name);
+        mesh.add(tag);
+      }
       scene.add(mesh);
-      actors.push({ def: p, mesh: mesh, offense: isOffense, last: null });
+      actors.push({ def: p, mesh: mesh, tag: tag, offense: isOffense, last: null });
     });
   }
   addSide(PLAY.offense, EAGLES, true);
@@ -553,6 +585,15 @@
     return { x: cr(p0[1], p1[1], p2[1], p3[1]), y: cr(p0[2], p1[2], p2[2], p3[2]) };
   }
 
+  // Which way a player is pointing: the direction they are travelling, or —
+  // when they are standing still — across the line at the other team.
+  function facing(a, t) {
+    var p = sample(a.def.keys, t), q = sample(a.def.keys, t + 0.12);
+    var dx = wx(q.y) - wx(p.y), dz = wz(q.x) - wz(p.x);
+    if (dx * dx + dz * dz > 1e-5) return Math.atan2(dx, dz) + Math.PI;
+    return a.offense ? 0 : Math.PI;
+  }
+
   function playerPos(id, t) {
     var a = byId[id];
     return a ? sample(a.def.keys, t) : { x: 109, y: 26.6 };
@@ -600,8 +641,10 @@
     broadcast: { fov: 46 },
     offense:   { fov: 58, pos: [88.0, 26.6], h: 18.0, look: [110.5, 29.0], lh: 0.8 },
     defense:   { fov: 58, pos: [130.0, 27.5], h: 18.0, look: [108.0, 27.0], lh: 0.8 },
-    top:       { fov: 55, pos: [108.6, 29.4], h: 22.5, look: [108.6, 29.4], lh: 0.0, up: [-1, 0, 0] }
+    top:       { fov: 55, pos: [108.6, 29.4], h: 22.5, look: [108.6, 29.4], lh: 0.0, up: [-1, 0, 0] },
+    pov:       { fov: 72 }
   };
+  var povActor = null;
   var camMode = 'broadcast';
   var cutNext = false;
 
@@ -624,11 +667,29 @@
   var camPos = new THREE.Vector3(), camLook = new THREE.Vector3(), started = false;
   function placeCamera(t, dt) {
     var m = CAMS[camMode] || CAMS.broadcast;
-    var want = (camMode === 'broadcast') ? cinematic(t) : {
-      pos: new THREE.Vector3(wx(m.pos[1]), m.h, wz(m.pos[0])),
-      look: new THREE.Vector3(wx(m.look[1]), m.lh, wz(m.look[0]))
-    };
-    var ease = (started && !cutNext) ? Math.min(1, dt * 6) : 1;   // switching cameras cuts
+    var want;
+    if (camMode === 'pov' && povActor) {
+      // Just behind the head, pointing where the player is pointing. At eye level
+      // exactly, a team-mate a yard away fills the whole frame; from here you see
+      // your own man and what is in front of him. If the ball is out of frame,
+      // that is the answer: at that moment, he could not see it.
+      var p = sample(povActor.def.keys, t);
+      var yaw = facing(povActor, t);
+      var fx = -Math.sin(yaw), fz = -Math.cos(yaw);
+      var px = wx(p.y), pz = wz(p.x);
+      want = {
+        pos: new THREE.Vector3(px - fx * 1.45, 2.05, pz - fz * 1.45),
+        look: new THREE.Vector3(px + fx * 10, 1.0, pz + fz * 10)
+      };
+    } else if (camMode === 'broadcast') {
+      want = cinematic(t);
+    } else {
+      want = {
+        pos: new THREE.Vector3(wx(m.pos[1]), m.h, wz(m.pos[0])),
+        look: new THREE.Vector3(wx(m.look[1]), m.lh, wz(m.look[0]))
+      };
+    }
+    var ease = (started && !cutNext) ? Math.min(1, dt * (camMode === 'pov' ? 14 : 6)) : 1;
     camPos.lerp(want.pos, ease);
     camLook.lerp(want.look, ease);
     if (Math.abs(camera.fov - m.fov) > 0.01) {
@@ -683,11 +744,7 @@
       var p = sample(a.def.keys, t);
       var X = wx(p.y), Z = wz(p.x);
       a.mesh.position.set(X, 0, Z);
-      var ahead = sample(a.def.keys, t + 0.12);
-      var dx = wx(ahead.y) - X, dz = wz(ahead.x) - Z;
-      if (dx * dx + dz * dz > 1e-5) a.mesh.rotation.y = Math.atan2(dx, dz) + Math.PI;
-      else if (!a.offense) a.mesh.rotation.y = 0;
-      else a.mesh.rotation.y = Math.PI;
+      a.mesh.rotation.y = facing(a, t);
       if (footTrails[a.def.id] && t >= 0) {
         if (t > trailT) pushTrail(footTrails[a.def.id], X, 0.05, Z);
       }
@@ -699,6 +756,16 @@
     if (t > trailT) trailT = t;
 
     paintOverlays(t);
+  }
+
+  // A name tag two yards from your face is a wall, so drop the ones that are
+  // close. Runs after the camera has been placed, and while paused too.
+  function updateTags() {
+    for (var i = 0; i < actors.length; i++) {
+      var a = actors[i];
+      if (!a.tag) continue;
+      a.tag.visible = !(camMode === 'pov' && a.mesh.position.distanceTo(camera.position) < 9);
+    }
   }
 
   // -------------------------------------------------------------- driver
@@ -722,6 +789,7 @@
     if (fromScrub) rewindTrails(t);
     if (!fromScrub) scrubber.value = t;
     frame(t);
+    updateTags();
   }
 
   playBtn.addEventListener('click', function () {
@@ -739,18 +807,73 @@
     setTime(parseFloat(scrubber.value), true);
   });
   var hintEl = document.getElementById('hint');
+  var wrapEl = document.querySelector('.wrap');
+  var povSel = document.getElementById('pov');
+
+  [['Philadelphia', PLAY.offense], ['New England', PLAY.defense]].forEach(function (side) {
+    var og = document.createElement('optgroup');
+    og.label = side[0];
+    side[1].forEach(function (p) {
+      var o = document.createElement('option');
+      o.value = p.id;
+      o.textContent = p.label || p.id;
+      og.appendChild(o);
+    });
+    povSel.appendChild(og);
+  });
+
+  function applyView() {
+    cutNext = true;
+    Array.prototype.forEach.call(document.querySelectorAll('.cam'), function (b) {
+      b.classList.toggle('primary', camMode !== 'pov' && b.dataset.cam === camMode);
+    });
+    povSel.classList.toggle('on', camMode === 'pov');
+    // The tactical views need width the reel format does not have.
+    stage.classList.toggle('tactical', camMode !== 'broadcast');
+    wrapEl.classList.toggle('wide', camMode !== 'broadcast');
+    designPaths.forEach(function (p) { p.visible = camMode === 'top'; });
+    if (camMode === 'top') {
+      hintEl.hidden = false; hintEl.textContent = 'End zone \u2192';
+    } else if (camMode === 'pov' && povActor) {
+      hintEl.hidden = false;
+      hintEl.textContent = 'Following ' + (povActor.def.label || povActor.def.id).split(' \u2014 ')[0];
+    } else {
+      hintEl.hidden = true;
+    }
+  }
+
+  function setPov(id) {
+    povActor = id ? byId[id] : null;
+    if (povActor) camMode = 'pov';
+    applyView();
+  }
+
+  povSel.addEventListener('change', function () {
+    if (povSel.value) setPov(povSel.value);
+    else { camMode = 'broadcast'; setPov(null); }
+  });
+
   Array.prototype.forEach.call(document.querySelectorAll('.cam'), function (btn) {
     btn.addEventListener('click', function () {
       camMode = btn.dataset.cam;
-      cutNext = true;
-      Array.prototype.forEach.call(document.querySelectorAll('.cam'), function (b) {
-        b.classList.toggle('primary', b === btn);
-      });
-      // The tactical views need width the reel format does not have.
-      stage.classList.toggle('tactical', camMode !== 'broadcast');
-      hintEl.hidden = camMode !== 'top';
-      designPaths.forEach(function (p) { p.visible = camMode === 'top'; });
+      povSel.value = '';
+      setPov(null);
     });
+  });
+
+  // Full size: the stage takes the panel, the controls float over the bottom.
+  var expandBtn = document.getElementById('expandBtn');
+  function setExpanded(on) {
+    stage.classList.toggle('expanded', on);
+    wrapEl.classList.toggle('expanded', on);
+    expandBtn.textContent = on ? 'Close' : 'Expand';
+    expandBtn.classList.toggle('primary', on);
+  }
+  expandBtn.addEventListener('click', function () {
+    setExpanded(!stage.classList.contains('expanded'));
+  });
+  window.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape' && stage.classList.contains('expanded')) setExpanded(false);
   });
 
   // The stage changes shape when the camera does, so check every frame rather
@@ -777,6 +900,7 @@
     }
     syncSize();
     placeCamera(t, dt);
+    updateTags();
     renderer.render(scene, camera);
     requestAnimationFrame(loop);
   }

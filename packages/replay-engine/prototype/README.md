@@ -17,10 +17,14 @@ python3 -m http.server 4173 --directory packages/replay-engine/prototype
   `t` in seconds from the snap. Sample it at 10 Hz and it is a TrackingFrame array.
 - [`index.html`](index.html) — the renderer. Three.js, no build step. Field painted
   procedurally to a canvas texture, players as blocky primitives, Catmull-Rom
-  through the keyframes so paths bend instead of turning corners, and four cameras:
-  broadcast (the cinematic keyframe path), offense, defense, and a top-down view
-  that draws the designed paths as a diagram. The stage widens from 9:16 to 4:5 for
-  the three tactical views, because 24 yards of play does not fit a reel.
+  through the keyframes so paths bend instead of turning corners, and five ways to
+  watch: broadcast (the cinematic keyframe path), offense, defense, a top-down view
+  that draws the designed paths as a diagram, and a per-player view — pick any of
+  the 22 from the dropdown and the camera rides just behind his head, pointing
+  where he is pointing. If the ball is out of frame, that is the answer: at that
+  moment he could not see it. Expand takes the stage full size. The stage widens
+  from 9:16 to 4:5 for the tactical views, because 24 yards of play does not fit
+  a reel.
 
 **The positions are hand-authored.** The All-22 for this play has never been
 released as tracking data, so the paths match the shape of the play and nothing

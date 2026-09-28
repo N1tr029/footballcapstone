@@ -89,6 +89,15 @@ tests/
 
 ---
 
+## Prototype
+
+[`packages/replay-engine/prototype`](packages/replay-engine/prototype) — the Philly
+Special, Super Bowl LII, rebuilt as a scrubbable 3D replay from timed keyframes in
+the shared field coordinates. One play, no build step, hand-authored positions. It
+exists to prove the data model animates.
+
+---
+
 ## Team
 
 Capstone project.

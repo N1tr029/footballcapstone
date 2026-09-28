@@ -906,6 +906,29 @@
   var camPos = new THREE.Vector3(), camLook = new THREE.Vector3(), started = false;
   function placeCamera(t, dt) {
     var m = CAMS[(camMode === 'pov' && povInside) ? 'helmet' : camMode] || CAMS.broadcast;
+
+    if (camMode === 'pov' && povInside && povActor) {
+      // Rigidly mounted inside the helmet: take the head's own world transform
+      // rather than easing toward a computed one. Any lag between the two shows
+      // up as the cage sliding around the frame, which is the one thing a real
+      // helmet cam never does. The head is already moving, so no separate bob.
+      var pm = povActor.mesh;
+      pm.updateMatrixWorld(true);
+      var headObj = pm.userData.head;
+      var eye = headObj.localToWorld(new THREE.Vector3(0, 0.18, -0.2));
+      if (Math.abs(camera.fov - m.fov) > 0.01) {
+        camera.fov = m.fov;
+        camera.updateProjectionMatrix();
+      }
+      camera.up.set(0, 1, 0);
+      camera.position.copy(eye);
+      headObj.getWorldQuaternion(camera.quaternion);
+      camPos.copy(eye);
+      camLook.copy(eye).add(new THREE.Vector3(0, 0, -10).applyQuaternion(camera.quaternion));
+      started = true; cutNext = false;
+      return;
+    }
+
     var want;
     if (camMode === 'pov' && povActor) {
       // Just behind the head, pointing where the player is pointing. At eye level
@@ -920,28 +943,10 @@
       var nxt = sample(povActor.def.keys, t + 0.1);
       var spd = Math.min(1, Math.sqrt(Math.pow(nxt.x - p.x, 2) + Math.pow(nxt.y - p.y, 2)) * 10 / 7);
       var bob = Math.sin(t * 13) * 0.035 * spd;      // a footfall, not a camera shake
-      if (povInside) {
-        // Inside the helmet. The shell is a closed surface, so from in here its
-        // faces are turned away and cull; the facemask is a solid cage and does
-        // not, which is why you end up looking out through the bars.
-        // Sit at the face opening of the helmet that is actually on his head —
-        // read its world position rather than assuming a height, so the camera
-        // cannot end up inside his chest. The model has wall thickness, so from
-        // any further back you are looking at the inside of the shell.
-        var worn = povActor.mesh.userData.helmet;
-        worn.updateMatrixWorld();
-        var hc = new THREE.Vector3().setFromMatrixPosition(worn.matrixWorld);
-        var eye = hc.y - 0.02 + bob * 1.4;
-        want = {
-          pos: new THREE.Vector3(hc.x + fx * 0.16, eye, hc.z + fz * 0.16),
-          look: new THREE.Vector3(hc.x + fx * 10, eye + Math.tan(g.pitch) * 10, hc.z + fz * 10)
-        };
-      } else {
-        want = {
-          pos: new THREE.Vector3(px - fx * 1.95, 2.25 + bob, pz - fz * 1.95),
-          look: new THREE.Vector3(px + fx * 10, 1.15 + Math.tan(g.pitch) * 4.5, pz + fz * 10)
-        };
-      }
+      want = {
+        pos: new THREE.Vector3(px - fx * 1.95, 2.25 + bob, pz - fz * 1.95),
+        look: new THREE.Vector3(px + fx * 10, 1.15 + Math.tan(g.pitch) * 4.5, pz + fz * 10)
+      };
     } else if (camMode === 'broadcast') {
       want = cinematic(t);
     } else {

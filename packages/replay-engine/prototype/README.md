@@ -15,8 +15,11 @@ python3 -m http.server 4173 --directory packages/replay-engine/prototype
   and the beats that drive the captions. All in the field coordinates from
   [docs/roles.md](../../../docs/roles.md): `x` 0–120 downfield, `y` 0–53.3 across,
   `t` in seconds from the snap. Sample it at 10 Hz and it is a TrackingFrame array.
-- Each man has a head that turns toward the ball independently of his body, capped
-  at about a hundred degrees off the shoulders — so when the ball is behind him the
+- Each man has a head that turns independently of his body, capped
+  at about a hundred degrees off the shoulders, toward what he would actually be
+  watching: a carrier looks up the field or at the man he is about to give it to,
+  a passer looks at his receiver before he lets go, and everyone else watches the
+  ball — so when the ball is behind him the
   head stops at the limit and you can see he has lost it. He wears a modelled helmet
   ([`models/football-helmet.fbx`](models/football-helmet.fbx)), loaded with
   three.js's FBXLoader, scaled and turned to fit, and painted in kit colours — the

@@ -774,6 +774,12 @@
     designPaths.push(ln);
   });
 
+  function nextSeg(t) {
+    var segs = PLAY.ball;
+    for (var i = 0; i < segs.length; i++) if (segs[i].t0 > t) return segs[i];
+    return null;
+  }
+
   function ballSeg(t) {
     var segs = PLAY.ball, s = segs[0];
     for (var i = 0; i < segs.length; i++) if (t >= segs[i].t0) s = segs[i];
@@ -797,8 +803,16 @@
   function ballAt(t) {
     var s = ballSeg(t);
     if (s.type === 'spot') return { x: wx(s.y), y: 0.17, z: wz(s.x) };
-    if (s.type === 'carry') return handPos(s.player, t);
+    if (s.type === 'carry') {
+      var held = handPos(s.player, t);
+      var up = nextSeg(t);                          // bring it up to throw
+      if (up && up.type === 'pass' && up.from === s.player) {
+        held.y += RELEASE_LIFT * Math.max(0, Math.min(1, (t - (up.t0 - WINDUP)) / WINDUP));
+      }
+      return held;
+    }
     var from = handPos(s.from, s.t0), to = handPos(s.to, s.t1);
+    if (s.type === 'pass') from.y += RELEASE_LIFT;  // thrown from up by the ear
     var u = Math.min(1, Math.max(0, (t - s.t0) / (s.t1 - s.t0)));
     return {
       x: from.x + (to.x - from.x) * u,
@@ -806,6 +820,9 @@
       z: from.z + (to.z - from.z) * u
     };
   }
+
+  var WINDUP = 0.42;                               // seconds of arm before release
+  var RELEASE_LIFT = 0.5;                          // how far above carrying height
 
   function normAngle(a) {
     while (a > Math.PI) a -= Math.PI * 2;
@@ -817,8 +834,34 @@
   // and no further — so when the ball is behind him the head stops at the limit,
   // and you can see for yourself that he has lost it.
   var HEAD_LIMIT = 1.62;
+
+  function playerHead(id, t) {
+    var p = playerPos(id, t);
+    return { x: wx(p.y), y: 1.45, z: wz(p.x) };
+  }
+
+  // What a man is actually looking at, which is usually not the ball. A carrier
+  // looks where he is running, or at the man he is about to give it to; a passer
+  // looks at his receiver before he lets go. Only everybody else watches the ball
+  // — and a man holding it certainly does not stare at his own hands.
+  function lookTarget(a, t) {
+    var s = ballSeg(t), id = a.def.id;
+    if ((s.type === 'pass' || s.type === 'pitch' || s.type === 'snap') && s.from === id) {
+      return playerHead(s.to, t);
+    }
+    if (s.type === 'carry' && s.player === id) {
+      var up = nextSeg(t);
+      if (up && (up.type === 'pass' || up.type === 'pitch') && up.from === id && up.t0 - t < 0.9) {
+        return playerHead(up.to, t);
+      }
+      var p0 = sample(a.def.keys, t), yaw0 = facing(a, t);
+      return { x: wx(p0.y) - Math.sin(yaw0) * 8, y: 1.3, z: wz(p0.x) - Math.cos(yaw0) * 8 };
+    }
+    return ballAt(t);
+  }
+
   function gaze(a, t) {
-    var p = sample(a.def.keys, t), b = ballAt(t);
+    var p = sample(a.def.keys, t), b = lookTarget(a, t);
     var dx = b.x - wx(p.y), dz = b.z - wz(p.x);
     var flat = Math.sqrt(dx * dx + dz * dz);
     if (flat < 0.35) return { yaw: 0, pitch: 0 };
@@ -967,19 +1010,23 @@
   function poseArms(a, t) {
     var u = a.mesh.userData, s = ballSeg(t), id = a.def.id;
     var L = 0, R = 0;
-    if (s.type === 'carry' && s.player === id) {
+    var up = nextSeg(t);
+    if (up && (up.type === 'pass' || up.type === 'pitch') && up.from === id && up.t0 - t < WINDUP) {
+      var w = 1 - (up.t0 - t) / WINDUP;              // the arm comes back first
+      R = -0.9 - w * 1.8;
+      L = -0.5;
+    } else if ((s.type === 'pass' || s.type === 'pitch') && s.from === id && t - s.t0 < 0.4) {
+      R = -2.7 + ((t - s.t0) / 0.4) * 2.3;           // and follows through after
+      L = -0.6;
+    } else if (s.type === 'carry' && s.player === id) {
       L = -0.85; R = -1.25;                          // tucked against the ribs
-    } else if ((s.type === 'pass' || s.type === 'pitch') && s.from === id) {
-      var k = Math.min(1, (t - s.t0) / Math.max(0.01, s.t1 - s.t0));
-      R = -2.5 + k * 1.7;                            // wind-up snapping through
-      L = -0.7;
     } else if (s.to === id && s.t1 - t < 0.55) {
       L = -1.75; R = -1.75;                          // hands up for the ball
     } else if (/^(C|LG|LT|RG|RT|DL)$/.test(a.def.role || '') && t > 0 && t < 1.8) {
       L = -1.2; R = -1.2;                            // hands into the man opposite
     }
-    u.armL.rotation.x += (L - u.armL.rotation.x) * 0.35;
-    u.armR.rotation.x += (R - u.armR.rotation.x) * 0.35;
+    u.armL.rotation.x += (L - u.armL.rotation.x) * 0.5;
+    u.armR.rotation.x += (R - u.armR.rotation.x) * 0.5;
   }
 
   function frame(t) {

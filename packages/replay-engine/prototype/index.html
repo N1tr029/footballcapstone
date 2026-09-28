@@ -546,6 +546,7 @@
     head.rotation.order = 'YXZ';       // turn, then tilt — not the other way round
     head.position.y = 1.52;
     var helmet = buildHelmet(kit);
+    helmet.position.y = 0.16;                 // same seat as the modelled one
     head.add(helmet);
 
     // The gaze cone on the turf: where this man is actually looking.
@@ -596,9 +597,9 @@
   // A modelled helmet, worn by all 22. It arrives after the first frame, so
   // everyone starts in the primitive helmet above and swaps when it lands —
   // if it never lands, the primitive one is what you keep.
-  var HEAD_TARGET = 0.58;                     // helmet size in our yard units
+  var HEAD_TARGET = 0.54;                     // helmet size in our yard units
   var HEAD_TURN = Math.PI;                    // the model is built facing backwards
-  var HEAD_LIFT = 0.03;
+  var HEAD_LIFT = 0.2;                        // clear of the shoulder pads
 
   function dressHelmet(root, kit) {
     var obj = root.clone(true);
@@ -880,13 +881,17 @@
         // Inside the helmet. The shell is a closed surface, so from in here its
         // faces are turned away and cull; the facemask is a solid cage and does
         // not, which is why you end up looking out through the bars.
-        // Sit at the face opening, not in the middle of his skull — the model
-        // has wall thickness, so from further back you are looking at the inside
-        // of the shell rather than out of it.
-        var eye = 1.26 + bob * 1.4;
+        // Sit at the face opening of the helmet that is actually on his head —
+        // read its world position rather than assuming a height, so the camera
+        // cannot end up inside his chest. The model has wall thickness, so from
+        // any further back you are looking at the inside of the shell.
+        var worn = povActor.mesh.userData.helmet;
+        worn.updateMatrixWorld();
+        var hc = new THREE.Vector3().setFromMatrixPosition(worn.matrixWorld);
+        var eye = hc.y - 0.02 + bob * 1.4;
         want = {
-          pos: new THREE.Vector3(px + fx * 0.16, eye, pz + fz * 0.16),
-          look: new THREE.Vector3(px + fx * 10, eye + Math.tan(g.pitch) * 10, pz + fz * 10)
+          pos: new THREE.Vector3(hc.x + fx * 0.16, eye, hc.z + fz * 0.16),
+          look: new THREE.Vector3(hc.x + fx * 10, eye + Math.tan(g.pitch) * 10, hc.z + fz * 10)
         };
       } else {
         want = {

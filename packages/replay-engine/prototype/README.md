@@ -15,6 +15,11 @@ python3 -m http.server 4173 --directory packages/replay-engine/prototype
   and the beats that drive the captions. All in the field coordinates from
   [docs/roles.md](../../../docs/roles.md): `x` 0–120 downfield, `y` 0–53.3 across,
   `t` in seconds from the snap. Sample it at 10 Hz and it is a TrackingFrame array.
+- Each man has a head that turns toward the ball independently of his body, capped
+  at about a hundred degrees off the shoulders — so when the ball is behind him the
+  head stops at the limit and you can see he has lost it. A gaze cone on the turf
+  shows where he is looking. Arms carry, throw, reach or block. The ball is held in
+  a hand rather than floating at the chest, and it spirals along its flight path.
 - [`index.html`](index.html) — the renderer. Three.js, no build step. Field painted
   procedurally to a canvas texture, players as blocky primitives, Catmull-Rom
   through the keyframes so paths bend instead of turning corners, and five ways to

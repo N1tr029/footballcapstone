@@ -85,6 +85,7 @@
     position: absolute; inset: 0; pointer-events: none;
     box-shadow: inset 0 0 90px 30px rgba(3,7,10,.72);
   }
+  .povmask.inside { box-shadow: inset 0 0 130px 62px rgba(2,5,8,.9); }
 
   /* handwritten caption pill, the tennyclub tell */
   .caption {
@@ -250,6 +251,7 @@
       <select id="pov" aria-label="Watch the play through one player's eyes">
         <option value="">Player view&hellip;</option>
       </select>
+      <button id="helmetBtn" type="button" aria-pressed="false">Helmet cam</button>
       <button id="expandBtn" type="button">Expand</button>
     </div>
   </div>
@@ -304,7 +306,7 @@
   scene.background = new THREE.Color(0x05090C);
   scene.fog = new THREE.Fog(0x070E13, 40, 96);
 
-  var camera = new THREE.PerspectiveCamera(46, 9 / 16, 0.1, 400);
+  var camera = new THREE.PerspectiveCamera(46, 9 / 16, 0.05, 400);
   var renderer = new THREE.WebGLRenderer({ antialias: true });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
   stage.appendChild(renderer.domElement);
@@ -603,8 +605,12 @@
     obj.traverse(function (o) {
       if (!o.isMesh) return;
       var n = (o.name || '').toLowerCase();
-      var isCage = n.indexOf('uv02') !== -1;   // the facemask mesh
-      o.material = new THREE.MeshLambertMaterial({ color: isCage ? 0xC4CDD2 : kit.helmet });
+      // uv01 is the shell, uv03 the facemask, uv02 the padding inside — which
+      // you only ever see from the helmet cam, looking out.
+      var col = kit.helmet;
+      if (n.indexOf('uv03') !== -1) col = 0xC4CDD2;
+      else if (n.indexOf('uv02') !== -1) col = 0x23282B;
+      o.material = new THREE.MeshLambertMaterial({ color: col });
     });
     return obj;
   }
@@ -829,9 +835,11 @@
     offense:   { fov: 58, pos: [88.0, 26.6], h: 18.0, look: [110.5, 29.0], lh: 0.8 },
     defense:   { fov: 58, pos: [130.0, 27.5], h: 18.0, look: [108.0, 27.0], lh: 0.8 },
     top:       { fov: 55, pos: [108.6, 29.4], h: 22.5, look: [108.6, 29.4], lh: 0.0, up: [-1, 0, 0] },
-    pov:       { fov: 66 }
+    pov:       { fov: 66 },
+    helmet:    { fov: 96 }
   };
   var povActor = null;
+  var povInside = false;      // true = look out through the facemask
   var camMode = 'broadcast';
   var cutNext = false;
 
@@ -853,7 +861,7 @@
 
   var camPos = new THREE.Vector3(), camLook = new THREE.Vector3(), started = false;
   function placeCamera(t, dt) {
-    var m = CAMS[camMode] || CAMS.broadcast;
+    var m = CAMS[(camMode === 'pov' && povInside) ? 'helmet' : camMode] || CAMS.broadcast;
     var want;
     if (camMode === 'pov' && povActor) {
       // Just behind the head, pointing where the player is pointing. At eye level
@@ -868,10 +876,24 @@
       var nxt = sample(povActor.def.keys, t + 0.1);
       var spd = Math.min(1, Math.sqrt(Math.pow(nxt.x - p.x, 2) + Math.pow(nxt.y - p.y, 2)) * 10 / 7);
       var bob = Math.sin(t * 13) * 0.035 * spd;      // a footfall, not a camera shake
-      want = {
-        pos: new THREE.Vector3(px - fx * 1.95, 2.25 + bob, pz - fz * 1.95),
-        look: new THREE.Vector3(px + fx * 10, 1.15 + Math.tan(g.pitch) * 4.5, pz + fz * 10)
-      };
+      if (povInside) {
+        // Inside the helmet. The shell is a closed surface, so from in here its
+        // faces are turned away and cull; the facemask is a solid cage and does
+        // not, which is why you end up looking out through the bars.
+        // Sit at the face opening, not in the middle of his skull — the model
+        // has wall thickness, so from further back you are looking at the inside
+        // of the shell rather than out of it.
+        var eye = 1.26 + bob * 1.4;
+        want = {
+          pos: new THREE.Vector3(px + fx * 0.16, eye, pz + fz * 0.16),
+          look: new THREE.Vector3(px + fx * 10, eye + Math.tan(g.pitch) * 10, pz + fz * 10)
+        };
+      } else {
+        want = {
+          pos: new THREE.Vector3(px - fx * 1.95, 2.25 + bob, pz - fz * 1.95),
+          look: new THREE.Vector3(px + fx * 10, 1.15 + Math.tan(g.pitch) * 4.5, pz + fz * 10)
+        };
+      }
     } else if (camMode === 'broadcast') {
       want = cinematic(t);
     } else {
@@ -1013,7 +1035,7 @@
     for (var i = 0; i < actors.length; i++) {
       var a = actors[i];
       if (!a.tag) continue;
-      a.tag.visible = !(camMode === 'pov' && a.mesh.position.distanceTo(camera.position) < 9);
+      a.tag.visible = !(camMode === 'pov' && a.mesh.position.distanceTo(camera.position) < (povInside ? 3 : 9));
     }
   }
 
@@ -1077,7 +1099,10 @@
       b.classList.toggle('primary', camMode !== 'pov' && b.dataset.cam === camMode);
     });
     povSel.classList.toggle('on', camMode === 'pov');
-    document.getElementById('povmask').hidden = camMode !== 'pov';
+    var mask = document.getElementById('povmask');
+    mask.hidden = camMode !== 'pov';
+    mask.classList.toggle('inside', povInside);
+    helmetBtn.setAttribute('aria-pressed', String(povInside && camMode === 'pov'));
     // The tactical views need width the reel format does not have.
     stage.classList.toggle('tactical', camMode !== 'broadcast');
     wrapEl.classList.toggle('wide', camMode !== 'broadcast');
@@ -1086,7 +1111,8 @@
       hintEl.hidden = false; hintEl.textContent = 'End zone \u2192';
     } else if (camMode === 'pov' && povActor) {
       hintEl.hidden = false;
-      hintEl.textContent = 'Following ' + (povActor.def.label || povActor.def.id).split(' \u2014 ')[0];
+      hintEl.textContent = (povInside ? 'Inside the helmet of ' : 'Following ')
+        + (povActor.def.label || povActor.def.id).split(' \u2014 ')[0];
     } else {
       hintEl.hidden = true;
     }
@@ -1109,6 +1135,14 @@
       povSel.value = '';
       setPov(null);
     });
+  });
+
+  var helmetBtn = document.getElementById('helmetBtn');
+  helmetBtn.addEventListener('click', function () {
+    povInside = !povInside;
+    cutNext = true;
+    if (povInside && !povActor) { povSel.value = 'FOLES'; setPov('FOLES'); }
+    else applyView();
   });
 
   // Full size: the stage takes the panel, the controls float over the bottom.

@@ -25,7 +25,10 @@ python3 -m http.server 4173 --directory packages/replay-engine/prototype
   in the code as the fallback, and is what you see if the model fails to load. The
   facemask is the point: it only exists on the front, so facing reads from any
   angle, with the crest stripe doing the same job from directly overhead and a gaze
-  cone backing it up in the top view.
+  cone backing it up in the top view. **Helmet cam** puts the camera at the face
+  opening and you look out through the bars: the shell is modelled with wall
+  thickness, so sit any further back and you are looking at the inside of it
+  rather than out of it.
 
   **Provenance:** the model was supplied locally and arrived without a licence
   file. Confirm its licence and attribution terms before this repository goes any

@@ -114,4 +114,5 @@ Capstone project.
 ## Further reading
 
 - [docs/roles.md](docs/roles.md) — how the work splits across the five of us
+- [docs/animation.md](docs/animation.md) — why the player views are wrong, and the plan
 - [docs/architecture.md](docs/architecture.md)

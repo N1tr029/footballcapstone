@@ -282,6 +282,8 @@
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/libs/fflate.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/FBXLoader.js"></script>
 <script src="plays/philly-special.js"></script>
 <script>
 (function () {
@@ -541,7 +543,8 @@
     var head = new THREE.Group();
     head.rotation.order = 'YXZ';       // turn, then tilt — not the other way round
     head.position.y = 1.52;
-    head.add(buildHelmet(kit));
+    var helmet = buildHelmet(kit);
+    head.add(helmet);
 
     // The gaze cone on the turf: where this man is actually looking.
     var LOOK = 1.75;                                   // about 100 degrees
@@ -562,7 +565,7 @@
       ring.rotation.x = -Math.PI / 2; ring.position.y = 0.04; grp.add(ring);
     }
     grp.scale.setScalar(0.85);
-    grp.userData = { head: head, armL: armL, armR: armR, cone: cone };
+    grp.userData = { head: head, helmet: helmet, armL: armL, armR: armR, cone: cone };
     return grp;
   }
 
@@ -587,6 +590,56 @@
     return sp;
   }
 
+  // ---- the real helmet ------------------------------------------------
+  // A modelled helmet, worn by all 22. It arrives after the first frame, so
+  // everyone starts in the primitive helmet above and swaps when it lands —
+  // if it never lands, the primitive one is what you keep.
+  var HEAD_TARGET = 0.58;                     // helmet size in our yard units
+  var HEAD_TURN = Math.PI;                    // the model is built facing backwards
+  var HEAD_LIFT = 0.03;
+
+  function dressHelmet(root, kit) {
+    var obj = root.clone(true);
+    obj.traverse(function (o) {
+      if (!o.isMesh) return;
+      var n = (o.name || '').toLowerCase();
+      var isCage = n.indexOf('uv02') !== -1;   // the facemask mesh
+      o.material = new THREE.MeshLambertMaterial({ color: isCage ? 0xC4CDD2 : kit.helmet });
+    });
+    return obj;
+  }
+
+  function loadHelmet(onReady) {
+    if (typeof THREE.FBXLoader !== 'function') return;
+    var loader = new THREE.FBXLoader();
+    function ready(root) {
+      // Normalise whatever the exporter gave us: sit it on the origin at the
+      // right size, then let the caller turn it to face the way we need.
+      var box = new THREE.Box3().setFromObject(root);
+      var size = box.getSize(new THREE.Vector3());
+      var mid = box.getCenter(new THREE.Vector3());
+      console.log('helmet bbox', size.x.toFixed(2), size.y.toFixed(2), size.z.toFixed(2));
+      root.traverse(function (o) {
+        if (o.isMesh) console.log('  mesh', o.name);
+      });
+      root.position.sub(mid);
+      var holder = new THREE.Group();
+      holder.add(root);
+      holder.scale.setScalar(HEAD_TARGET / Math.max(size.x, size.y, size.z));
+      holder.rotation.y = HEAD_TURN;
+      holder.position.y = HEAD_LIFT;
+      onReady(holder);
+    }
+    if (window.HELMET_FBX_B64) {
+      var bin = atob(window.HELMET_FBX_B64), n = bin.length, bytes = new Uint8Array(n);
+      for (var i = 0; i < n; i++) bytes[i] = bin.charCodeAt(i);
+      try { ready(loader.parse(bytes.buffer, '')); } catch (e) { console.warn('helmet parse failed', e); }
+    } else {
+      loader.load('models/football-helmet.fbx', ready, undefined,
+        function (e) { console.warn('helmet load failed', e); });
+    }
+  }
+
   var actors = [];
   function addSide(list, kit, isOffense) {
     list.forEach(function (p) {
@@ -602,6 +655,16 @@
   }
   addSide(PLAY.offense, EAGLES, true);
   addSide(PLAY.defense, PATS, false);
+
+  loadHelmet(function (model) {
+    actors.forEach(function (a) {
+      var head = a.mesh.userData.head;
+      head.remove(a.mesh.userData.helmet);
+      var worn = dressHelmet(model, a.offense ? EAGLES : PATS);
+      head.add(worn);
+      a.mesh.userData.helmet = worn;
+    });
+  });
   var byId = {};
   actors.forEach(function (a) { byId[a.def.id] = a; });
 

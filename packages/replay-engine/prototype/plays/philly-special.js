@@ -12,6 +12,14 @@
  *   y  0–53.3 yards across. y increases toward the OFFENSE'S RIGHT.
  *   t  seconds relative to the snap (t = 0). Pre-snap frames are negative.
  *
+ * `face` is body orientation in degrees, 0 = downfield, increasing toward the
+ * offense's right — the thing a real tracking release measures in its own `o`
+ * column, and the thing you must never derive from direction of travel. Foles
+ * runs to the corner at about 60 degrees while facing 250: away from where he
+ * is going, back at the ball. Only the three men who touch the ball have it
+ * here; the rest fall back to direction of travel, which the rig then corrects
+ * for as best it can and marks as unmeasured.
+ *
  * Positions between keyframes are interpolated by the renderer, which is what
  * makes this a keyframe form of the TrackingFrame contract rather than a
  * separate format: sample it at 10 Hz and you have TrackingFrames.
@@ -45,16 +53,16 @@
     ],
 
     offense: [
-      { id: 'FOLES', label: "Foles \u2014 quarterback, and the receiver", num: 9, name: 'Foles', role: 'QB', star: true, keys: [
+      { id: 'FOLES', face: [[-2.6, 0], [0, 0], [0.7, 330], [1.5, 300], [2.2, 262], [2.9, 250], [4.4, 20], [5.0, 20]], label: "Foles \u2014 quarterback, and the receiver", num: 9, name: 'Foles', role: 'QB', star: true, keys: [
         [-2.6, 106.4, 26.6], [-1.9, 106.6, 28.4], [-1.1, 107.0, 32.0], [-0.3, 107.2, 33.9],
         [0, 107.2, 34.0], [0.7, 106.9, 35.4], [1.4, 107.1, 37.0], [2.0, 108.0, 38.6],
         [2.6, 109.4, 40.0], [2.92, 110.4, 40.6], [3.6, 112.2, 41.2], [5.0, 113.0, 41.4],
       ]},
-      { id: 'CLEMENT', label: "Clement \u2014 takes the direct snap", num: 30, name: 'Clement', role: 'RB', star: true, keys: [
+      { id: 'CLEMENT', face: [[-2.6, 0], [0, 0], [0.5, 335], [1.0, 315], [2.0, 300], [4.0, 300]], label: "Clement \u2014 takes the direct snap", num: 30, name: 'Clement', role: 'RB', star: true, keys: [
         [-2.6, 104.7, 26.0], [0, 104.8, 26.0], [0.5, 105.2, 23.6], [0.98, 105.8, 21.2],
         [1.6, 106.4, 19.0], [2.6, 107.2, 17.4], [4.0, 107.6, 16.8],
       ]},
-      { id: 'BURTON', label: "Burton \u2014 tight end, throws the pass", num: 88, name: 'Burton', role: 'TE', star: true, keys: [
+      { id: 'BURTON', face: [[-2.6, 20], [0, 25], [1.0, 55], [1.8, 68], [2.4, 70], [4.2, 80]], label: "Burton \u2014 tight end, throws the pass", num: 88, name: 'Burton', role: 'TE', star: true, keys: [
         [-2.6, 107.0, 19.2], [-0.6, 107.0, 19.2], [0, 106.9, 19.4], [0.6, 106.3, 20.4],
         [1.22, 106.0, 21.6], [1.8, 106.3, 27.0], [2.32, 106.8, 31.8], [3.0, 106.9, 33.2],
         [4.2, 107.0, 33.6],

@@ -187,6 +187,36 @@
   select.on { color: #06231F; background: var(--eagles-lit); border-color: var(--eagles-lit); }
   .spacer { flex: 1; }
 
+  /* ---- provenance and checks --------------------------------------- */
+  .prov { display: flex; flex-wrap: wrap; gap: 6px; }
+  .badge {
+    font-family: 'Barlow Condensed', 'Arial Narrow', sans-serif; font-weight: 600;
+    font-size: 11px; letter-spacing: .1em; text-transform: uppercase;
+    padding: 4px 9px; border-radius: 5px; border: 1px solid var(--line);
+    color: var(--ink-dim); background: var(--panel);
+  }
+  .badge b { font-weight: 600; color: var(--ink); }
+  .badge.measured { border-color: #1F5E52; color: #7FD8C8; }
+  .badge.inferred { border-color: #6B5320; color: var(--gold); }
+
+  .framing {
+    font-size: 14px; color: var(--ink-dim); border-left: 2px solid var(--eagles-lit);
+    padding-left: 12px;
+  }
+  .framing.poor { border-left-color: var(--gold); color: var(--ink); }
+
+  details.checks { border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
+  details.checks summary {
+    cursor: pointer; padding: 10px 14px; color: var(--ink-dim);
+    font-family: 'Barlow Condensed', 'Arial Narrow', sans-serif; font-weight: 600;
+    font-size: 12px; letter-spacing: .1em; text-transform: uppercase;
+  }
+  details.checks pre {
+    margin: 0; padding: 0 14px 14px; overflow-x: auto; font-size: 11.5px;
+    line-height: 1.45; color: var(--ink-dim);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+
   /* ---- notes ------------------------------------------------------- */
   .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
   .cell { background: var(--panel); padding: 13px 15px; display: flex; flex-direction: column; gap: 3px; }
@@ -256,6 +286,13 @@
     </div>
   </div>
 
+  <div class="prov" id="prov"></div>
+  <p class="framing" id="framing" hidden></p>
+  <details class="checks">
+    <summary>Checks on this play</summary>
+    <pre id="checksOut">Opening this runs them.</pre>
+  </details>
+
   <dl class="grid">
     <div class="cell"><dt>The call</dt><dd>Direct snap to the back, reverse, halfback pass</dd></div>
     <div class="cell"><dt>Touched the ball</dt><dd><b>Kelce</b> &rarr; <b>Clement</b> &rarr; <b>Burton</b> &rarr; <b>Foles</b></dd></div>
@@ -286,6 +323,10 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/libs/fflate.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/FBXLoader.js"></script>
+<script src="engine/contract.js"></script>
+<script src="engine/adapters.js"></script>
+<script src="engine/rig.js"></script>
+<script src="engine/qa.js"></script>
 <script src="plays/philly-special.js"></script>
 <script>
 (function () {
@@ -514,14 +555,17 @@
     var shadow = new THREE.Mesh(new THREE.CircleGeometry(0.44, 18), SHADOW);
     shadow.rotation.x = -Math.PI / 2; shadow.position.y = 0.015; grp.add(shadow);
 
+    // Hips stay with the body; everything above the waist turns on the torso.
+    var upper = new THREE.Group();
+    grp.add(upper);
     var torso = new THREE.Mesh(new THREE.BoxGeometry(0.58, 0.78, 0.38), jersey);
-    torso.position.y = 1.00; grp.add(torso);
+    torso.position.y = 1.00; upper.add(torso);
     var pads = new THREE.Mesh(new THREE.BoxGeometry(0.84, 0.24, 0.48), jersey);
-    pads.position.y = 1.34; grp.add(pads);
+    pads.position.y = 1.34; upper.add(pads);
     // A stripe across the chest only: from behind you see a plain back, from the
     // front a marked one, so which way a man is turned reads at any distance.
     var chest = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.16, 0.04), trimMat);
-    chest.position.set(0, 1.2, -0.2); grp.add(chest);
+    chest.position.set(0, 1.2, -0.2); upper.add(chest);
 
     [-0.15, 0.15].forEach(function (dx) {
       var leg = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.64, 0.22), pants);
@@ -535,7 +579,7 @@
       var limb = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.56, 0.2), jersey);
       limb.position.y = -0.28;
       pivot.add(limb);
-      grp.add(pivot);
+      upper.add(pivot);
       return pivot;
     }
     var armL = arm(-0.38), armR = arm(0.38);
@@ -558,7 +602,7 @@
     cone.rotation.x = -Math.PI / 2;
     cone.position.y = -1.5;
     head.add(cone);
-    grp.add(head);
+    upper.add(head);
 
     if (star) {
       var ring = new THREE.Mesh(
@@ -568,7 +612,7 @@
       ring.rotation.x = -Math.PI / 2; ring.position.y = 0.04; grp.add(ring);
     }
     grp.scale.setScalar(0.85);
-    grp.userData = { head: head, helmet: helmet, armL: armL, armR: armR, cone: cone };
+    grp.userData = { torso: upper, head: head, helmet: helmet, armL: armL, armR: armR, cone: cone };
     return grp;
   }
 
@@ -657,7 +701,7 @@
         mesh.add(tag);
       }
       scene.add(mesh);
-      actors.push({ def: p, mesh: mesh, tag: tag, offense: isOffense, last: null });
+      actors.push({ id: p.id, def: p, mesh: mesh, tag: tag, offense: isOffense, last: null });
     });
   }
   addSide(PLAY.offense, EAGLES, true);
@@ -724,65 +768,40 @@
   // lines under the play. Only shown from above, where the play is a diagram.
   var designPaths = [];
 
-  // ------------------------------------------------------- interpolation
-  // Catmull-Rom through the keyframes, parameterised by time, so a path bends
-  // the way a player bends instead of turning square corners.
-  function sample(keys, t) {
-    var n = keys.length;
-    if (t <= keys[0][0]) return { x: keys[0][1], y: keys[0][2] };
-    if (t >= keys[n - 1][0]) return { x: keys[n - 1][1], y: keys[n - 1][2] };
-    var i = 0;
-    while (i < n - 2 && keys[i + 1][0] < t) i++;
-    var p0 = keys[Math.max(0, i - 1)], p1 = keys[i], p2 = keys[i + 1], p3 = keys[Math.min(n - 1, i + 2)];
-    var u = (t - p1[0]) / (p2[0] - p1[0]);
-    function cr(a, b, c, d) {
-      var u2 = u * u, u3 = u2 * u;
-      return 0.5 * ((2 * b) + (-a + c) * u + (2 * a - 5 * b + 4 * c - d) * u2 + (-a + 3 * b - 3 * c + d) * u3);
-    }
-    return { x: cr(p0[1], p1[1], p2[1], p3[1]), y: cr(p0[2], p1[2], p2[2], p3[2]) };
-  }
+  // ------------------------------------------------------------ the rig
+  // Everything the renderer draws now comes from the shared pipeline: the play
+  // becomes a PlayTrack, the rig turns that into poses. No orientation guessed
+  // here, no gaze rules here, no hand-declared exchanges here — swap the adapter
+  // and a real tracked play draws through exactly this code.
+  var track = GRID.fromKeyframes(PLAY);
+  var rig = new GRID.Rig(track);
+  var REPORT = GRID.qa(track, rig);
+  var byQa = {};
+  REPORT.players.forEach(function (r) { byQa[r.id] = r; });
+  if (REPORT.problems.length) console.warn('play problems', REPORT.problems);
 
-  // Which way a player is pointing: the direction they are travelling, or —
-  // when they are standing still — across the line at the other team.
-  // A wider window than feels necessary: the camera is bolted to the head, so
-  // every degree the head turns is a degree the whole frame turns. Damping has
-  // to happen here, on the head itself — damping the camera instead would let
-  // the cage drift away from the view it is supposed to be fixed in.
-  var SMOOTH = [-0.26, -0.13, 0, 0.13, 0.26];
+  // The men who touch the ball, from the rig rather than a hard-coded list.
+  var PRINCIPALS = REPORT.players.filter(function (r) { return r.principal; })
+                                 .map(function (r) { return r.id; });
+  var TRAIL_COLOURS = [0x2FBFAE, 0x8FE0D1, 0xF6F3EC, 0xF5C451];
+  footTrails = {};
+  PRINCIPALS.forEach(function (id, i) {
+    footTrails[id] = makeTrail(TRAIL_COLOURS[i % TRAIL_COLOURS.length], 2, 1200);
+  });
 
-  function rawFacing(a, t) {
-    var p = sample(a.def.keys, t), q = sample(a.def.keys, t + 0.12);
-    var dx = wx(q.y) - wx(p.y), dz = wz(q.x) - wz(p.x);
-    if (dx * dx + dz * dz > 1e-5) return Math.atan2(dx, dz) + Math.PI;
-    return a.offense ? 0 : Math.PI;
-  }
-
-  function facing(a, t) {
-    var sx = 0, sz = 0;
-    for (var i = 0; i < SMOOTH.length; i++) {
-      var y = rawFacing(a, t + SMOOTH[i]);
-      sx += Math.sin(y); sz += Math.cos(y);
-    }
-    if (sx * sx + sz * sz < 1e-6) return rawFacing(a, t);
-    return Math.atan2(sx, sz);
-  }
-
-  function playerPos(id, t) {
-    var a = byId[id];
-    return a ? sample(a.def.keys, t) : { x: 109, y: 26.6 };
-  }
-
-  [['CLEMENT', 0x2FBFAE], ['BURTON', 0x8FE0D1], ['FOLES', 0xF6F3EC]].forEach(function (pair) {
-    var a = byId[pair[0]];
-    if (!a) return;
+  PRINCIPALS.forEach(function (id, i) {
     var pts = [];
-    for (var s = 0; s <= 4.2; s += 0.07) {
-      var p = sample(a.def.keys, s);
-      pts.push(new THREE.Vector3(wx(p.y), 0.03, wz(p.x)));
-    }
+    track.frames.forEach(function (f) {
+      var pl = f.players[id];
+      if (pl) pts.push(new THREE.Vector3(wx(pl.y), 0.03, wz(pl.x)));
+    });
+    if (pts.length < 2) return;
     var ln = new THREE.Line(
       new THREE.BufferGeometry().setFromPoints(pts),
-      new THREE.LineDashedMaterial({ color: pair[1], dashSize: 0.5, gapSize: 0.42, transparent: true, opacity: 0.5 })
+      new THREE.LineDashedMaterial({
+        color: TRAIL_COLOURS[i % TRAIL_COLOURS.length], dashSize: 0.5, gapSize: 0.42,
+        transparent: true, opacity: 0.5
+      })
     );
     ln.computeLineDistances();
     ln.visible = false;
@@ -790,116 +809,11 @@
     designPaths.push(ln);
   });
 
-  function nextSeg(t) {
-    var segs = PLAY.ball;
-    for (var i = 0; i < segs.length; i++) if (segs[i].t0 > t) return segs[i];
-    return null;
-  }
-
-  function ballSeg(t) {
-    var segs = PLAY.ball, s = segs[0];
-    for (var i = 0; i < segs.length; i++) if (t >= segs[i].t0) s = segs[i];
-    return s;
-  }
-
-  // Where a man's hands are: out to his right side, at carrying height. The ball
-  // is held here and thrown from here, rather than from the middle of his chest.
-  function handPos(id, t) {
-    var a = byId[id], p = playerPos(id, t);
-    var yaw = a ? facing(a, t) : 0;
-    var fx = -Math.sin(yaw), fz = -Math.cos(yaw);
-    var rx = -fz, rz = fx;                          // his right, on the ground plane
-    return {
-      x: wx(p.y) + rx * 0.34 + fx * 0.14,
-      y: 1.02,
-      z: wz(p.x) + rz * 0.34 + fz * 0.14
-    };
-  }
-
-  function ballAt(t) {
-    var s = ballSeg(t);
-    if (s.type === 'spot') return { x: wx(s.y), y: 0.17, z: wz(s.x) };
-    if (s.type === 'carry') {
-      var held = handPos(s.player, t);
-      var up = nextSeg(t);                          // bring it up to throw
-      if (up && up.type === 'pass' && up.from === s.player) {
-        held.y += RELEASE_LIFT * Math.max(0, Math.min(1, (t - (up.t0 - WINDUP)) / WINDUP));
-      }
-      return held;
-    }
-    var from = handPos(s.from, s.t0), to = handPos(s.to, s.t1);
-    if (s.type === 'pass') from.y += RELEASE_LIFT;  // thrown from up by the ear
-    var u = Math.min(1, Math.max(0, (t - s.t0) / (s.t1 - s.t0)));
-    return {
-      x: from.x + (to.x - from.x) * u,
-      y: from.y + (to.y - from.y) * u + Math.sin(u * Math.PI) * (s.apex - 1.0),
-      z: from.z + (to.z - from.z) * u
-    };
-  }
-
-  var WINDUP = 0.42;                               // seconds of arm before release
-  var RELEASE_LIFT = 0.5;                          // how far above carrying height
-
-  function normAngle(a) {
-    while (a > Math.PI) a -= Math.PI * 2;
-    while (a < -Math.PI) a += Math.PI * 2;
-    return a;
-  }
-
-  // Head aim. A man can turn his head about a hundred degrees off his shoulders
-  // and no further — so when the ball is behind him the head stops at the limit,
-  // and you can see for yourself that he has lost it.
-  var HEAD_LIMIT = 1.62;
-
-  function playerHead(id, t) {
-    var p = playerPos(id, t);
-    return { x: wx(p.y), y: 1.45, z: wz(p.x) };
-  }
-
-  // What a man is actually looking at, which is usually not the ball. A carrier
-  // looks where he is running, or at the man he is about to give it to; a passer
-  // looks at his receiver before he lets go. Only everybody else watches the ball
-  // — and a man holding it certainly does not stare at his own hands.
-  function lookTarget(a, t) {
-    var s = ballSeg(t), id = a.def.id;
-    if ((s.type === 'pass' || s.type === 'pitch' || s.type === 'snap') && s.from === id) {
-      return playerHead(s.to, t);
-    }
-    if (s.type === 'carry' && s.player === id) {
-      var up = nextSeg(t);
-      if (up && (up.type === 'pass' || up.type === 'pitch') && up.from === id && up.t0 - t < 0.9) {
-        return playerHead(up.to, t);
-      }
-      var p0 = sample(a.def.keys, t), yaw0 = facing(a, t);
-      return { x: wx(p0.y) - Math.sin(yaw0) * 8, y: 1.3, z: wz(p0.x) - Math.cos(yaw0) * 8 };
-    }
-    return ballAt(t);
-  }
-
-  function gaze(a, t) {
-    var yaw = 0, pitch = 0, locked = false;
-    for (var i = 0; i < SMOOTH.length; i++) {
-      var g = rawGaze(a, t + SMOOTH[i]);
-      yaw += g.yaw; pitch += g.pitch;
-      if (g.locked) locked = true;
-    }
-    return { yaw: yaw / SMOOTH.length, pitch: pitch / SMOOTH.length, locked: locked };
-  }
-
-  function rawGaze(a, t) {
-    var p = sample(a.def.keys, t), b = lookTarget(a, t);
-    var dx = b.x - wx(p.y), dz = b.z - wz(p.x);
-    var flat = Math.sqrt(dx * dx + dz * dz);
-    if (flat < 0.35) return { yaw: 0, pitch: 0 };
-    var rel = normAngle(Math.atan2(dx, dz) + Math.PI - facing(a, t));
-    var yaw = Math.max(-HEAD_LIMIT, Math.min(HEAD_LIMIT, rel));
-    var pitch = Math.max(-0.3, Math.min(0.3, Math.atan2(b.y - 1.55, flat) * 0.6));
-    return { yaw: yaw, pitch: pitch, locked: Math.abs(rel) > HEAD_LIMIT };
-  }
+  // The throw that scores it, found by the rig from the events.
+  var PASS = null;
+  rig.swaps.forEach(function (sw) { if (sw.kind === 'pass_forward') PASS = sw; });
 
   // ------------------------------------------------------------- cameras
-  // Four ways to watch the same play. Broadcast is the cinematic keyframe path;
-  // the other three are fixed vantage points a coach would ask for.
   var CAMS = {
     broadcast: { fov: 46 },
     offense:   { fov: 58, pos: [88.0, 26.6], h: 18.0, look: [110.5, 29.0], lh: 0.8 },
@@ -908,9 +822,9 @@
     pov:       { fov: 66 },
     helmet:    { fov: 90 }
   };
-  var povActor = null;
-  var povInside = false;      // true = look out through the facemask
   var camMode = 'broadcast';
+  var povActor = null;
+  var povInside = false;
   var cutNext = false;
 
   function cinematic(t) {
@@ -921,7 +835,7 @@
     }
     var span = (b.t - a.t) || 1;
     var u = Math.min(1, Math.max(0, (t - a.t) / span));
-    u = u * u * (3 - 2 * u);                                  // ease in-out
+    u = u * u * (3 - 2 * u);
     function mix(p, q) { return p + (q - p) * u; }
     return {
       pos: new THREE.Vector3(mix(wx(a.pos[1]), wx(b.pos[1])), mix(a.h, b.h), mix(wz(a.pos[0]), wz(b.pos[0]))),
@@ -930,24 +844,18 @@
   }
 
   var camPos = new THREE.Vector3(), camLook = new THREE.Vector3(), started = false;
+
   function placeCamera(t, dt) {
     var m = CAMS[(camMode === 'pov' && povInside) ? 'helmet' : camMode] || CAMS.broadcast;
 
     if (camMode === 'pov' && povInside && povActor) {
-      // Rigidly mounted inside the helmet: take the head's own world transform
-      // rather than easing toward a computed one. Any lag between the two shows
-      // up as the cage sliding around the frame, which is the one thing a real
-      // helmet cam never does. The head is already moving, so no separate bob.
+      // Rigidly mounted in the helmet. The head is already rate-limited by the
+      // rig, so there is nothing left to smooth and nothing to lag behind.
       var pm = povActor.mesh;
       pm.updateMatrixWorld(true);
       var headObj = pm.userData.head;
-      // Far enough forward that the shell is not a blindfold when he looks up,
-      // far enough back that the cage is still between him and the field.
       var eye = headObj.localToWorld(new THREE.Vector3(0, 0.16, -0.14));
-      if (Math.abs(camera.fov - m.fov) > 0.01) {
-        camera.fov = m.fov;
-        camera.updateProjectionMatrix();
-      }
+      if (Math.abs(camera.fov - m.fov) > 0.01) { camera.fov = m.fov; camera.updateProjectionMatrix(); }
       camera.up.set(0, 1, 0);
       camera.position.copy(eye);
       headObj.getWorldQuaternion(camera.quaternion);
@@ -959,22 +867,16 @@
 
     var want;
     if (camMode === 'pov' && povActor) {
-      // Just behind the head, pointing where the player is pointing. At eye level
-      // exactly, a team-mate a yard away fills the whole frame; from here you see
-      // your own man and what is in front of him. If the ball is out of frame,
-      // that is the answer: at that moment, he could not see it.
-      var p = sample(povActor.def.keys, t);
-      var g = gaze(povActor, t);
-      var yaw = facing(povActor, t) + g.yaw;         // follows the head, not the hips
-      var fx = -Math.sin(yaw), fz = -Math.cos(yaw);
-      var px = wx(p.y), pz = wz(p.x);
-      var nxt = sample(povActor.def.keys, t + 0.1);
-      var spd = Math.min(1, Math.sqrt(Math.pow(nxt.x - p.x, 2) + Math.pow(nxt.y - p.y, 2)) * 10 / 7);
-      var bob = Math.sin(t * 13) * 0.035 * spd;      // a footfall, not a camera shake
-      want = {
-        pos: new THREE.Vector3(px - fx * 1.95, 2.25 + bob, pz - fz * 1.95),
-        look: new THREE.Vector3(px + fx * 10, 1.15 + Math.tan(g.pitch) * 4.5, pz + fz * 10)
-      };
+      var pose = rig.poseAt(t).players[povActor.id];
+      if (pose) {
+        var yaw = GRID.degToWorldYaw(pose.o + pose.torso + pose.neck);
+        var fx = -Math.sin(yaw), fz = -Math.cos(yaw);
+        var px = wx(pose.y), pz = wz(pose.x);
+        want = {
+          pos: new THREE.Vector3(px - fx * 1.95, 2.25, pz - fz * 1.95),
+          look: new THREE.Vector3(px + fx * 10, 1.15 + Math.tan(pose.pitch * Math.PI / 180) * 4.5, pz + fz * 10)
+        };
+      } else want = cinematic(t);
     } else if (camMode === 'broadcast') {
       want = cinematic(t);
     } else {
@@ -983,13 +885,11 @@
         look: new THREE.Vector3(wx(m.look[1]), m.lh, wz(m.look[0]))
       };
     }
-    var ease = (started && !cutNext) ? Math.min(1, dt * (camMode === 'pov' ? 14 : 6)) : 1;
+
+    var ease = (started && !cutNext) ? Math.min(1, dt * (camMode === 'pov' ? 12 : 6)) : 1;
     camPos.lerp(want.pos, ease);
     camLook.lerp(want.look, ease);
-    if (Math.abs(camera.fov - m.fov) > 0.01) {
-      camera.fov = m.fov;
-      camera.updateProjectionMatrix();
-    }
+    if (Math.abs(camera.fov - m.fov) > 0.01) { camera.fov = m.fov; camera.updateProjectionMatrix(); }
     var up = m.up || [0, 1, 0];
     camera.up.set(up[0], up[1], up[2]);
     camera.position.copy(camPos);
@@ -1025,90 +925,65 @@
     keyEls.forEach(function (el, i) {
       el.className = 'key' + (i === idx ? ' live' : (idx > i ? ' done' : ''));
     });
-    document.getElementById('scorePhi').textContent = t >= 2.92 ? '21' : '15';
-    document.getElementById('sit').innerHTML = t >= 2.92
+    var scored = PASS && PASS.tArrive != null && t >= PASS.tArrive;
+    document.getElementById('scorePhi').textContent = scored ? '21' : '15';
+    document.getElementById('sit').innerHTML = scored
       ? 'Touchdown &middot; 0:34 2Q'
       : '4th &amp; Goal &middot; 0:38 2Q';
     document.getElementById('clock').textContent = (t >= 0 ? '+' : '') + t.toFixed(1) + 's';
   }
 
   // ----------------------------------------------------------- the frame
-  var PASS = null;                                   // the throw that scores it
-  for (var pi = 0; pi < PLAY.ball.length; pi++) {
-    if (PLAY.ball[pi].type === 'pass') PASS = PLAY.ball[pi];
-  }
-
-  // Arms carry, throw, reach or block, depending on what this man is doing with
-  // the ball at this instant.
-  function poseArms(a, t) {
-    var u = a.mesh.userData, s = ballSeg(t), id = a.def.id;
-    var L = 0, R = 0;
-    var up = nextSeg(t);
-    if (up && (up.type === 'pass' || up.type === 'pitch') && up.from === id && up.t0 - t < WINDUP) {
-      var w = 1 - (up.t0 - t) / WINDUP;              // the arm comes back first
-      R = -0.9 - w * 1.8;
-      L = -0.5;
-    } else if ((s.type === 'pass' || s.type === 'pitch') && s.from === id && t - s.t0 < 0.4) {
-      R = -2.7 + ((t - s.t0) / 0.4) * 2.3;           // and follows through after
-      L = -0.6;
-    } else if (s.type === 'carry' && s.player === id) {
-      L = -0.85; R = -1.25;                          // tucked against the ribs
-    } else if (s.to === id && s.t1 - t < 0.55) {
-      L = -1.75; R = -1.75;                          // hands up for the ball
-    } else if (/^(C|LG|LT|RG|RT|DL)$/.test(a.def.role || '') && t > 0 && t < 1.8) {
-      L = -1.2; R = -1.2;                            // hands into the man opposite
-    }
-    u.armL.rotation.x += (L - u.armL.rotation.x) * 0.5;
-    u.armR.rotation.x += (R - u.armR.rotation.x) * 0.5;
-  }
-
   function frame(t) {
+    var pose = rig.poseAt(t);
+
     actors.forEach(function (a) {
-      var p = sample(a.def.keys, t);
-      var X = wx(p.y), Z = wz(p.x);
+      var pl = pose.players[a.id];
+      if (!pl) return;
+      var X = wx(pl.y), Z = wz(pl.x);
       a.mesh.position.set(X, 0, Z);
-      a.mesh.rotation.y = facing(a, t);
+      a.mesh.rotation.y = GRID.degToWorldYaw(pl.o);
 
-      var g = gaze(a, t);                            // head turns, body does not
       var u = a.mesh.userData;
-      u.head.rotation.y = g.yaw;
-      u.head.rotation.x = g.pitch;
+      u.torso.rotation.y = GRID.degToWorldYaw(pl.torso);
+      u.head.rotation.y = GRID.degToWorldYaw(pl.neck);
+      u.head.rotation.x = pl.pitch * Math.PI / 180;
+      u.armL.rotation.x = pl.armL;
+      u.armR.rotation.x = pl.armR;
       u.cone.visible = camMode === 'top';
-      poseArms(a, t);
 
-      if (footTrails[a.def.id] && t >= 0) {
-        if (t > trailT) pushTrail(footTrails[a.def.id], X, 0.05, Z);
-      }
+      if (footTrails[a.id] && t >= 0 && t > trailT) pushTrail(footTrails[a.id], X, 0.05, Z);
     });
 
-    // The ball: held in a hand, or in the air pointing where it is going and
-    // turning over as it goes.
-    var bp = ballAt(t), bn = ballAt(t + 0.04);
-    ball.position.set(bp.x, bp.y, bp.z);
-    var vx = bn.x - bp.x, vy = bn.y - bp.y, vz = bn.z - bp.z;
-    var speed = Math.sqrt(vx * vx + vy * vy + vz * vz);
-    var seg = ballSeg(t);
-    if (speed > 0.015 && seg.type !== 'carry' && seg.type !== 'spot') {
-      ball.lookAt(bp.x + vx, bp.y + vy, bp.z + vz);
-      ball.rotateZ(t * 24);                          // the spiral
-    } else {
-      ball.rotation.set(0, facing(byId[seg.player] || actors[0], t), 0.35);
+    var b = pose.ball;
+    if (b) {
+      var bx = wx(b.y), by = b.z == null ? 1.05 : b.z, bz = wz(b.x);
+      ball.position.set(bx, by, bz);
+      var nx = rig.poseAt(t + 0.04).ball;
+      if (nx) {
+        var vx = wx(nx.y) - bx, vy = (nx.z == null ? by : nx.z) - by, vz = wz(nx.x) - bz;
+        if (Math.sqrt(vx * vx + vy * vy + vz * vz) > 0.02 && !pose.carrier) {
+          ball.lookAt(bx + vx, by + vy, bz + vz);
+          ball.rotateZ(t * 24);
+        } else {
+          ball.rotation.set(0, GRID.degToWorldYaw(pose.carrier && pose.players[pose.carrier] ? pose.players[pose.carrier].o : 0), 0.35);
+        }
+      }
+      if (t >= 0 && t > trailT) pushTrail(ballTrail, bx, by, bz);
     }
-    if (t >= 0 && t > trailT) pushTrail(ballTrail, bp.x, bp.y, bp.z);
     if (t > trailT) trailT = t;
 
-    // A ring on the turf where it was caught, for the third of a second after.
-    if (PASS) {
-      var since = t - PASS.t1;
+    if (PASS && PASS.tArrive != null && PASS.to) {
+      var since = t - PASS.tArrive;
       if (since >= 0 && since < 0.5) {
-        var hp = handPos(PASS.to, PASS.t1);
-        catchRing.position.set(hp.x, 0.05, hp.z);
-        catchRing.scale.setScalar(0.5 + since * 4.4);
-        catchRing.material.opacity = 0.75 * (1 - since / 0.5);
-        catchRing.visible = true;
-      } else {
-        catchRing.visible = false;
-      }
+        var rcv = pose.players[PASS.to];
+        if (rcv) {
+          catchRing.position.set(wx(rcv.y), 0.05, wz(rcv.x));
+          catchRing.scale.setScalar(0.5 + since * 4.4);
+          catchRing.material.opacity = 0.75 * (1 - since / 0.5);
+          catchRing.visible = true;
+        }
+      } else catchRing.visible = false;
     }
 
     paintOverlays(t);
@@ -1192,6 +1067,7 @@
     stage.classList.toggle('tactical', camMode !== 'broadcast');
     wrapEl.classList.toggle('wide', camMode !== 'broadcast');
     designPaths.forEach(function (p) { p.visible = camMode === 'top'; });
+    showFraming();
     if (camMode === 'top') {
       hintEl.hidden = false; hintEl.textContent = 'End zone \u2192';
     } else if (camMode === 'pov' && povActor) {
@@ -1229,6 +1105,50 @@
     if (povInside && !povActor) { povSel.value = 'FOLES'; setPov('FOLES'); }
     else applyView();
   });
+
+  // What is measured and what is drawn. The animation is the most persuasive
+  // thing on the page and the least grounded, so it says so out loud.
+  (function () {
+    var prov = document.getElementById('prov');
+    var counts = rig.provenance(), total = 0;
+    Object.keys(counts).forEach(function (k) { total += counts[k]; });
+    var measured = Math.round(((counts.measured || 0) / (total || 1)) * 100);
+    function badge(label, value, kind) {
+      var el = document.createElement('span');
+      el.className = 'badge ' + kind;
+      el.innerHTML = label + ' <b>' + value + '</b>';
+      prov.appendChild(el);
+    }
+    badge('Positions', track.meta.adapter === 'tracking' ? 'measured' : 'hand-authored',
+          track.meta.adapter === 'tracking' ? 'measured' : 'inferred');
+    badge('Orientation', measured + '% measured', measured >= 50 ? 'measured' : 'inferred');
+    badge('Events', rig.swaps.length + ' derived', 'measured');
+    badge('Gaze', 'modelled', 'inferred');
+    badge('Limbs', 'modelled', 'inferred');
+
+    var out = document.getElementById('checksOut');
+    var det = out.parentNode, filled = false;
+    det.addEventListener('toggle', function () {
+      if (det.open && !filled) { out.textContent = GRID.qaText(REPORT); filled = true; }
+    });
+  })();
+
+  // Whether the view you picked can actually see the play. A lineman who never
+  // finds the ball is a finding; the same frame unlabelled is a bug.
+  var framingEl = document.getElementById('framing');
+  function showFraming() {
+    if (!povActor || camMode !== 'pov') { framingEl.hidden = true; return; }
+    var row = byQa[povActor.id];
+    if (!row) { framingEl.hidden = true; return; }
+    var pct = Math.round(row.ballInView * 100);
+    var poor = pct < 35 || row.fails.length;
+    framingEl.hidden = false;
+    framingEl.className = 'framing' + (poor ? ' poor' : '');
+    framingEl.textContent = 'From here the ball is in view for ' + pct + '% of the play'
+      + (Math.round(row.lost * 100) ? ', and out of reach of his head for ' + Math.round(row.lost * 100) + '%' : '')
+      + '.' + (row.fails.length ? ' ' + row.fails.join('; ') + '.' : '')
+      + (row.warnings.length ? ' ' + row.warnings.join('; ') + '.' : '');
+  }
 
   // Full size: the stage takes the panel, the controls float over the bottom.
   var expandBtn = document.getElementById('expandBtn');

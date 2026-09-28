@@ -1,5 +1,11 @@
 # How players move, look and are filmed
 
+> **Status:** all five phases are built. The renderer no longer guesses anything —
+> it consumes a `PlayTrack` through `engine/adapters.js`, poses it through
+> `engine/rig.js`, and is checked by `engine/qa.js`, which runs headless over any
+> play via `node scripts/qa-play.js <play>`. What follows is the diagnosis that
+> led there, kept because the reasoning is the point.
+
 The replay prototype animates one hand-authored play. Watching the quarterback's
 helmet cam end to end shows that it does not survive contact with a second one —
 and the reasons are structural, not cosmetic. This is the diagnosis and the plan.
@@ -170,3 +176,36 @@ honest version of that, and they stop good animation from implying good data.
 Phases 0 and 1 are most of the win and are mechanical. Phase 2 is the only part
 that needs judgement, and it is the only part that will still be inference when
 real data is flowing.
+
+
+---
+
+## What was built
+
+| file | does |
+|---|---|
+| `engine/contract.js` | the shared shape, the angle convention, and `validate()` |
+| `engine/adapters.js` | `fromKeyframes` (the fixture) and `fromTrackingRows` (real releases) |
+| `engine/rig.js` | carrier chain, exchanges, the gaze model, limb poses |
+| `engine/qa.js` | per-play, per-player checks and a printable report |
+| `scripts/qa-play.js` | the same checks headless, non-zero exit on a play not to publish |
+
+The renderer holds no play logic at all now. To add a real tracked play you write
+nothing: `GRID.fromTrackingRows(rows)` produces the same `PlayTrack` the fixture
+does, and everything downstream — cameras, helmet cam, gaze, arms, the checks —
+works unchanged. The one thing to calibrate on first contact with a real release
+is the `angle` option, which maps that release's orientation convention onto ours.
+
+### What the checks caught on the first run
+
+Worth recording, because it is the argument for having them:
+
+- **Derived orientation spins on the spot.** Below walking pace, direction of
+  travel is noise, so bodies span wildly exactly when a lineman is set. Now held
+  below 0.6 yd/s and rate-limited. Real releases have the same failure mode, which
+  is why they ship `o`.
+- **A neck injury in the fixture.** Foles' authored turn upfield after the catch
+  was 130° in half a second. The rate check found it; the keyframes were spread.
+- **Linemen cannot see anything.** Their helmet cams are obstructed for a sixth of
+  the play by the man across from them. That is true, so it is reported as a
+  finding on the view rather than counted as a defect.

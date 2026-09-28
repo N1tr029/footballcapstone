@@ -129,13 +129,30 @@ can work at once.
 **TrackingFrame** — one instant of one play.
 
 ```
-play_id, t (seconds from snap), players[]:
-  { player_id, team, jersey?, x, y (yards, field coords), speed, direction, orientation }
+t, events[]                      # ball_snap, handoff, lateral, pass_forward, …
+players[]:
+  { id, team, x, y, s, a, dir, o, o_source }
+ball: { x, y, z? }
 ```
 
 Field coordinates: origin at the back of one end zone, x downfield 0–120, y
-across 0–53.3. Everything — stream 2's output, Big Data Bowl data, stream 3's
-simulated plays — is in these units, so stream 1 draws all three the same way.
+across 0–53.3 increasing toward the offense's right. Angles in degrees, 0 =
+facing +x, increasing toward +y.
+
+Two angles, and they are not interchangeable. **`dir`** is the direction a player
+is *moving*; **`o`** is the direction his body is *pointing*. Every public
+tracking release carries both columns because they diverge — a receiver drifting
+to a corner with his head back at the ball can be a hundred degrees apart. Derive
+one from the other and the quarterback ends up watching grass; we did exactly
+that, and [animation.md](animation.md) is the post-mortem.
+
+**`o_source`** records how the orientation was arrived at — `measured`,
+`from_dir`, `from_velocity`, `assumed`, or `authored` — so the renderer can badge
+a drawing as a drawing instead of letting good animation imply good data.
+
+Everything — the vision pipeline's output, public tracking releases, the play
+model's simulated alternative — is in these units, so the replay engine draws all
+three the same way.
 
 **PlayState** — the situation at the snap.
 

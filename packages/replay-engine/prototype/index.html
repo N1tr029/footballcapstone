@@ -458,13 +458,54 @@
     color: 0x03080A, transparent: true, opacity: 0.32, depthWrite: false
   });
 
+  // A football helmet: shell, jaw flaps, crest stripe and a facemask cage. The
+  // cage is the point — it is the one part that only exists on the front, so a
+  // man's facing reads instantly from any angle, including from directly above.
+  function buildHelmet(kit) {
+    var g = new THREE.Group();
+    var shellMat = new THREE.MeshLambertMaterial({ color: kit.helmet });
+    var trimMat = new THREE.MeshLambertMaterial({ color: kit.trim });
+    var cageMat = new THREE.MeshLambertMaterial({ color: 0xC4CDD2 });
+
+    var shell = new THREE.Mesh(new THREE.SphereGeometry(0.25, 18, 14), shellMat);
+    shell.scale.set(1.0, 0.94, 1.1);
+    shell.position.y = 0.06;
+    g.add(shell);
+
+    [-1, 1].forEach(function (s) {                    // jaw flaps over the ears
+      var jaw = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.17, 0.21), shellMat);
+      jaw.position.set(s * 0.21, -0.07, -0.01);
+      g.add(jaw);
+    });
+
+    var crest = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.05, 0.48), trimMat);
+    crest.position.y = 0.28;                          // the stripe, read from above
+    g.add(crest);
+
+    var neck = new THREE.Mesh(new THREE.BoxGeometry(0.26, 0.08, 0.08), shellMat);
+    neck.position.set(0, -0.13, 0.19);
+    g.add(neck);
+
+    // Facemask: two bars curving round the front, one bar down the middle.
+    var barGeo = new THREE.TorusGeometry(0.19, 0.014, 6, 14, 0, Math.PI);
+    [-0.02, -0.13].forEach(function (y) {
+      var bar = new THREE.Mesh(barGeo, cageMat);
+      bar.rotation.x = -Math.PI / 2;
+      bar.position.y = y;
+      g.add(bar);
+    });
+    var centre = new THREE.Mesh(new THREE.BoxGeometry(0.018, 0.14, 0.018), cageMat);
+    centre.position.set(0, -0.075, -0.19);
+    g.add(centre);
+
+    return g;
+  }
+
   function buildPlayer(kit, star) {
     var grp = new THREE.Group();
     var jersey = new THREE.MeshLambertMaterial({ color: kit.jersey });
     var pants = new THREE.MeshLambertMaterial({ color: kit.pants });
-    var helmetMat = new THREE.MeshLambertMaterial({ color: kit.helmet });
     var trimMat = new THREE.MeshLambertMaterial({ color: kit.trim });
-    var maskMat = new THREE.MeshLambertMaterial({ color: 0xB9C3C8 });
 
     var shadow = new THREE.Mesh(new THREE.CircleGeometry(0.44, 18), SHADOW);
     shadow.rotation.x = -Math.PI / 2; shadow.position.y = 0.015; grp.add(shadow);
@@ -500,12 +541,7 @@
     var head = new THREE.Group();
     head.rotation.order = 'YXZ';       // turn, then tilt — not the other way round
     head.position.y = 1.52;
-    var skull = new THREE.Mesh(new THREE.SphereGeometry(0.21, 14, 12), helmetMat);
-    skull.position.y = 0.08; head.add(skull);
-    var crest = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.04, 0.4), trimMat);
-    crest.position.y = 0.26; head.add(crest);
-    var mask = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.09, 0.2), maskMat);
-    mask.position.set(0, 0.02, -0.2); head.add(mask);
+    head.add(buildHelmet(kit));
 
     // The gaze cone on the turf: where this man is actually looking.
     var LOOK = 1.75;                                   // about 100 degrees
@@ -857,7 +893,6 @@
   }
 
   function frame(t) {
-    var showCones = camMode !== 'pov';
     actors.forEach(function (a) {
       var p = sample(a.def.keys, t);
       var X = wx(p.y), Z = wz(p.x);
@@ -868,7 +903,7 @@
       var u = a.mesh.userData;
       u.head.rotation.y = g.yaw;
       u.head.rotation.x = g.pitch;
-      u.cone.visible = showCones;
+      u.cone.visible = camMode === 'top';
       poseArms(a, t);
 
       if (footTrails[a.def.id] && t >= 0) {

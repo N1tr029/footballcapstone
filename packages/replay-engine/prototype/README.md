@@ -17,8 +17,13 @@ python3 -m http.server 4173 --directory packages/replay-engine/prototype
   `t` in seconds from the snap. Sample it at 10 Hz and it is a TrackingFrame array.
 - Each man has a head that turns toward the ball independently of his body, capped
   at about a hundred degrees off the shoulders — so when the ball is behind him the
-  head stops at the limit and you can see he has lost it. A gaze cone on the turf
-  shows where he is looking. Arms carry, throw, reach or block. The ball is held in
+  head stops at the limit and you can see he has lost it. He wears a helmet built out of
+  primitives — shell, jaw flaps, crest stripe, facemask cage — and the cage is the
+  point: it only exists on the front, so facing reads from any angle, including
+  from directly overhead, where the crest stripe does the same job. No model file
+  is fetched: the published page cannot load one, and a third-party NFL helmet
+  model would bring team marks with it. A gaze cone on the turf backs it up in the
+  top view. Arms carry, throw, reach or block. The ball is held in
   a hand rather than floating at the chest, and it spirals along its flight path.
 - [`index.html`](index.html) — the renderer. Three.js, no build step. Field painted
   procedurally to a canvas texture, players as blocky primitives, Catmull-Rom

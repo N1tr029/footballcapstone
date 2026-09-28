@@ -744,11 +744,27 @@
 
   // Which way a player is pointing: the direction they are travelling, or —
   // when they are standing still — across the line at the other team.
-  function facing(a, t) {
+  // A wider window than feels necessary: the camera is bolted to the head, so
+  // every degree the head turns is a degree the whole frame turns. Damping has
+  // to happen here, on the head itself — damping the camera instead would let
+  // the cage drift away from the view it is supposed to be fixed in.
+  var SMOOTH = [-0.26, -0.13, 0, 0.13, 0.26];
+
+  function rawFacing(a, t) {
     var p = sample(a.def.keys, t), q = sample(a.def.keys, t + 0.12);
     var dx = wx(q.y) - wx(p.y), dz = wz(q.x) - wz(p.x);
     if (dx * dx + dz * dz > 1e-5) return Math.atan2(dx, dz) + Math.PI;
     return a.offense ? 0 : Math.PI;
+  }
+
+  function facing(a, t) {
+    var sx = 0, sz = 0;
+    for (var i = 0; i < SMOOTH.length; i++) {
+      var y = rawFacing(a, t + SMOOTH[i]);
+      sx += Math.sin(y); sz += Math.cos(y);
+    }
+    if (sx * sx + sz * sz < 1e-6) return rawFacing(a, t);
+    return Math.atan2(sx, sz);
   }
 
   function playerPos(id, t) {
@@ -861,6 +877,16 @@
   }
 
   function gaze(a, t) {
+    var yaw = 0, pitch = 0, locked = false;
+    for (var i = 0; i < SMOOTH.length; i++) {
+      var g = rawGaze(a, t + SMOOTH[i]);
+      yaw += g.yaw; pitch += g.pitch;
+      if (g.locked) locked = true;
+    }
+    return { yaw: yaw / SMOOTH.length, pitch: pitch / SMOOTH.length, locked: locked };
+  }
+
+  function rawGaze(a, t) {
     var p = sample(a.def.keys, t), b = lookTarget(a, t);
     var dx = b.x - wx(p.y), dz = b.z - wz(p.x);
     var flat = Math.sqrt(dx * dx + dz * dz);
@@ -880,7 +906,7 @@
     defense:   { fov: 58, pos: [130.0, 27.5], h: 18.0, look: [108.0, 27.0], lh: 0.8 },
     top:       { fov: 55, pos: [108.6, 29.4], h: 22.5, look: [108.6, 29.4], lh: 0.0, up: [-1, 0, 0] },
     pov:       { fov: 66 },
-    helmet:    { fov: 96 }
+    helmet:    { fov: 90 }
   };
   var povActor = null;
   var povInside = false;      // true = look out through the facemask
@@ -915,7 +941,9 @@
       var pm = povActor.mesh;
       pm.updateMatrixWorld(true);
       var headObj = pm.userData.head;
-      var eye = headObj.localToWorld(new THREE.Vector3(0, 0.18, -0.2));
+      // Far enough forward that the shell is not a blindfold when he looks up,
+      // far enough back that the cage is still between him and the field.
+      var eye = headObj.localToWorld(new THREE.Vector3(0, 0.16, -0.14));
       if (Math.abs(camera.fov - m.fov) > 0.01) {
         camera.fov = m.fov;
         camera.updateProjectionMatrix();

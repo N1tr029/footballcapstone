@@ -595,3 +595,119 @@ drawFrame();
 setPlaying(true);
 </script>
 """
+
+
+def render_topdown(
+    track: PlayTrack,
+    out_path: str | Path,
+    truth: PlayTrack | None = None,
+    fps: int = 15,
+    size: tuple[int, int] = (1700, 800),
+    spec: FieldSpec = NFL,
+) -> Path:
+    """Draw the play as dots on a field, to an mp4.
+
+    The HTML inspector is better for actually inspecting — it scrubs, and it lists
+    what happened. This exists because a video file plays anywhere, needs no browser
+    and no link, and can be dropped into a slide.
+
+    Three things it draws that matter more than they look like they should:
+
+    The carrier is **gold**, because a dot view of a passing play with no indication of
+    who has the ball is unreadable — it is twenty-two dots milling about.
+
+    The ball **pulses while it is in the air**, so a throw is visible as a throw rather
+    than as the carrier marker vanishing for two seconds.
+
+    Ground truth is drawn as hollow rings under the solid dots when ``truth`` is given,
+    which turns an error figure into something you can see: a dot inside its ring is
+    right, a ring with no dot is a player nobody found.
+    """
+    try:
+        import cv2
+    except ImportError as e:  # pragma: no cover
+        raise ImportError("rendering needs opencv: pip install opencv-python") from e
+    import numpy as np
+
+    from .interactions import derive as _derive
+
+    W, H = size
+    PAD = 42
+    sx = lambda x: int(PAD + (x / spec.length) * (W - 2 * PAD))   # noqa: E731
+    sy = lambda y: int(PAD + (y / spec.width) * (H - 2 * PAD))    # noqa: E731
+
+    GOLD, OFF, DEF = (45, 205, 255), (59, 169, 242), (232, 168, 79)
+    ix_p = _derive(track)
+    ix_t = _derive(truth) if truth is not None else None
+
+    bg = np.full((H, W, 3), (22, 26, 20), np.uint8)
+    cv2.rectangle(bg, (sx(0), sy(0)), (sx(spec.length), sy(spec.width)), (38, 64, 34), -1)
+    for a, b in ((0, spec.goal_a), (spec.goal_b, spec.length)):
+        cv2.rectangle(bg, (sx(a), sy(0)), (sx(b), sy(spec.width)), (28, 50, 26), -1)
+    for x in np.arange(spec.goal_a, spec.goal_b + .01, 5):
+        major = int(x) % 10 == 0
+        cv2.line(bg, (sx(x), sy(0)), (sx(x), sy(spec.width)),
+                 (150, 170, 150) if major else (92, 112, 92), 2 if major else 1)
+    for x in (0, spec.goal_a, spec.goal_b, spec.length):
+        cv2.line(bg, (sx(x), sy(0)), (sx(x), sy(spec.width)), (215, 230, 215), 3)
+    lo, hi = spec.hashes
+    for x in np.arange(spec.goal_a + 1, spec.goal_b, 1.0):
+        for hy in (lo, hi):
+            cv2.line(bg, (sx(x), sy(hy) - 4), (sx(x), sy(hy) + 4), (108, 128, 108), 1)
+
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    vw = cv2.VideoWriter(str(out_path), cv2.VideoWriter_fourcc(*"mp4v"), fps, (W, H))
+    tmap = {round(f.t, 2): f for f in (truth.frames if truth else [])}
+    trail: list[tuple[int, int]] = []
+
+    try:
+        for k, f in enumerate(track.frames):
+            img = bg.copy()
+            g = tmap.get(round(f.t, 2))
+            carrier = ix_t.carrier_at(f.t) if ix_t else ix_p.carrier_at(f.t)
+            in_flight = bool(g and g.ball and carrier is None)
+
+            if g:
+                for p in g.players.values():
+                    cv2.circle(img, (sx(p.x), sy(p.y)), 12, (140, 150, 140), 1, cv2.LINE_AA)
+                if g.ball:
+                    trail.append((sx(g.ball.x), sy(g.ball.y)))
+            for i in range(1, len(trail)):
+                cv2.line(img, trail[i - 1], trail[i], (90, 190, 230), 2, cv2.LINE_AA)
+
+            # The carrier is named in truth's id space; find the recovered dot nearest
+            # him rather than assuming the two id spaces agree, because they do not.
+            gold = None
+            ref = (g or f).players.get(carrier) if carrier else None
+            if ref is not None:
+                best, bd = None, 9.0
+                for pid, p in f.players.items():
+                    d = (p.x - ref.x) ** 2 + (p.y - ref.y) ** 2
+                    if d < bd:
+                        bd, best = d, pid
+                gold = best
+
+            for pid, p in f.players.items():
+                col = GOLD if pid == gold else (
+                    DEF if (ix_p.sides and ix_p.sides.team_of(track, pid) == "defense") else OFF)
+                cv2.circle(img, (sx(p.x), sy(p.y)), 11 if pid == gold else 9, col, -1, cv2.LINE_AA)
+                if pid == gold:
+                    cv2.circle(img, (sx(p.x), sy(p.y)), 19, GOLD, 2, cv2.LINE_AA)
+                rad = np.radians(p.o)
+                cv2.line(img, (sx(p.x), sy(p.y)),
+                         (int(sx(p.x) + np.cos(rad) * 22), int(sy(p.y) + np.sin(rad) * 22)),
+                         col, 2, cv2.LINE_AA)
+
+            if g and g.ball:
+                bx, by = sx(g.ball.x), sy(g.ball.y)
+                if in_flight:
+                    cv2.circle(img, (bx, by), 20 + int(6 * np.sin(k * 0.7)), (120, 255, 255), 2, cv2.LINE_AA)
+                    cv2.circle(img, (bx, by), 8, (150, 255, 255), -1, cv2.LINE_AA)
+                else:
+                    cv2.circle(img, (bx, by), 5, (230, 242, 246), -1, cv2.LINE_AA)
+
+            vw.write(img)
+    finally:
+        vw.release()
+    return out_path

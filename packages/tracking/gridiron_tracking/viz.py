@@ -41,6 +41,7 @@ def payload(
     interactions: Interactions | None = None,
     spec: FieldSpec = NFL,
     title: str | None = None,
+    ghost: PlayTrack | None = None,
 ) -> dict[str, Any]:
     """The play, compacted for the browser.
 
@@ -109,6 +110,18 @@ def payload(
         })
     timeline.sort(key=lambda r: (r["t0"], r["kind"]))
 
+    # The ghost is ground truth, drawn hollow behind the solid recovered dots. It
+    # turns "median error 2.3 yards" from a number into something you can see: a dot
+    # sitting inside its ring is right, a ring with no dot is a player the detector
+    # never found, and a dot drifting off its ring is the tracker losing him.
+    ghost_frames = None
+    if ghost is not None:
+        ghost_frames = [
+            {"t": round(f.t, 2),
+             "p": {pid: [round(p.x, 2), round(p.y, 2)] for pid, p in f.players.items()}}
+            for f in ghost.frames
+        ]
+
     o_counts: dict[str, int] = {}
     for f in track.frames:
         for p in f.players.values():
@@ -129,6 +142,7 @@ def payload(
         "oSources": O_SOURCES,
         "oCounts": o_counts,
         "notes": ix.notes,
+        "ghost": ghost_frames,
     }
 
 
@@ -137,9 +151,10 @@ def to_html(
     interactions: Interactions | None = None,
     spec: FieldSpec = NFL,
     title: str | None = None,
+    ghost: PlayTrack | None = None,
 ) -> str:
     """A self-contained page. No build step, no dependencies, no server."""
-    data = payload(track, interactions, spec=spec, title=title)
+    data = payload(track, interactions, spec=spec, title=title, ghost=ghost)
     return _TEMPLATE.replace("__DATA__", json.dumps(data, separators=(",", ":")))
 
 
@@ -149,10 +164,11 @@ def write_html(
     interactions: Interactions | None = None,
     spec: FieldSpec = NFL,
     title: str | None = None,
+    ghost: PlayTrack | None = None,
 ) -> Path:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(to_html(track, interactions, spec=spec, title=title))
+    path.write_text(to_html(track, interactions, spec=spec, title=title, ghost=ghost))
     return path
 
 
@@ -327,6 +343,7 @@ _TEMPLATE = r"""<title>Gridiron Play Inspector</title>
       <span class="key"><span class="swatch" style="background:var(--ball);outline:1px solid var(--chalk-hi)"></span>Ball</span>
       <span class="key"><span class="tickline"></span>Facing measured</span>
       <span class="key"><span class="tickline dash"></span>Facing inferred</span>
+      <span class="key" id="ghostkey" hidden><span class="swatch" style="background:transparent;border:1.5px solid var(--text-fade)"></span>Ground truth</span>
     </div>
   </div>
 
@@ -440,6 +457,19 @@ function drawFrame() {
     ctx.setLineDash([]);
   });
 
+  // Ground-truth rings first, so recovered dots sit on top of them.
+  if (DATA.ghost) {
+    let g = null, bd = Infinity;
+    DATA.ghost.forEach(f => { const d = Math.abs(f.t - fr.t); if (d < bd) { bd = d; g = f; } });
+    if (g && bd <= 0.06) {
+      ctx.strokeStyle = css('--text-fade'); ctx.lineWidth = 1.2;
+      for (const pid in g.p) {
+        const [gx, gy] = g.p[pid];
+        ctx.beginPath(); ctx.arc(sx(gx), sy(gy), r + 1.5, 0, Math.PI * 2); ctx.stroke();
+      }
+    }
+  }
+
   for (const pid in fr.p) {
     const [x, y, o, s, osrc] = fr.p[pid];
     const side = (DATA.roster[pid] || {}).side;
@@ -552,6 +582,7 @@ if (DATA.notes && DATA.notes.length) {
 document.getElementById('foot').textContent =
   'Every dot is one row of the exported play file. A dashed facing tick means orientation was inferred, not measured.';
 
+if (DATA.ghost) document.getElementById('ghostkey').hidden = false;
 document.getElementById('scrub').max = DATA.frames.length - 1;
 document.getElementById('scrub').addEventListener('input', ev => {
   setPlaying(false); idx = +ev.target.value; drawFrame();

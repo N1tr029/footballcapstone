@@ -14,6 +14,8 @@ video = ["opencv-python>=4.9"]
 detect = ["ultralytics>=8.1"]
 # Reading the field with a vision model, so registration stops being manual.
 vision = ["anthropic>=1.0", "opencv-python>=4.9"]
+# Benchmarking a video model against known tracking.
+vlm = ["google-genai>=2.0"]
 
 [build-system]
 requires = ["setuptools>=68"]

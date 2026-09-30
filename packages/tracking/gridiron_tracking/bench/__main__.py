@@ -167,6 +167,30 @@ def cmd_ablation(args) -> int:
     return 0
 
 
+def cmd_vlm(args) -> int:
+    """Hand a whole clip to a video model and score what comes back, in yards."""
+    from . import vlm_video as VV
+
+    plays = _load_plays(args.csv, 1, args.play)
+    if not plays:
+        print("no plays loaded", file=sys.stderr)
+        return 1
+    _, truth = plays[0]
+    runs = VV.compare(args.video, truth, args.model or [VV.DEFAULT_MODEL])
+    print(VV.table(runs))
+    print()
+    for r in runs:
+        if r.error:
+            continue
+        # The number that decides whether a video model can do this job at all is not
+        # accuracy, it is how many distinct instants it actually saw.
+        print(f"  {r.model}: returned {r.frames_returned} instants at {r.effective_hz:.2f} Hz; "
+              f"says it saw {r.frames_claimed_seen} frames. The contract is 10 Hz.")
+        if r.notes:
+            print(f"    notes: {r.notes[:160]}")
+    return 0
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="gridiron_tracking.bench", description=__doc__)
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -192,6 +216,13 @@ def main(argv=None) -> int:
     a = sub.add_parser("ablation", help="attribute the error to each stage")
     common(a)
     a.set_defaults(func=cmd_ablation)
+
+    v = sub.add_parser("vlm", help="score a video model against known tracking")
+    v.add_argument("--csv", required=True, help="the NGS tracking this video was made from")
+    v.add_argument("--play", action="append", required=True, help="the play id in that csv")
+    v.add_argument("--video", required=True, help="the clip to hand the model")
+    v.add_argument("--model", action="append", help="repeatable; defaults to gemini-flash-latest")
+    v.set_defaults(func=cmd_vlm)
 
     args = ap.parse_args(argv)
     return args.func(args)

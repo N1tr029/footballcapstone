@@ -19,6 +19,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+from ..config import load_env
 from ..detect.synthetic import NoiseModel
 from ..sources import ngs
 from . import synthetic_roundtrip
@@ -225,6 +226,8 @@ def main(argv=None) -> int:
     v.set_defaults(func=cmd_vlm)
 
     args = ap.parse_args(argv)
+    # Credentials live in a gitignored .env; nothing reads it unless we do.
+    load_env()
     return args.func(args)
 
 

@@ -81,17 +81,17 @@ def test_sparse_answers_are_reported_as_sparse():
     assert len(got.frames) < len(t.frames)
 
 
-def test_a_missing_key_fails_with_a_useful_message():
-    import os
-    saved = {k: os.environ.pop(k, None) for k in ("GEMINI_API_KEY", "GOOGLE_API_KEY")}
-    try:
-        r = VV.run("nonexistent.mp4", _truth())
-        assert r.error and "key" in r.error.lower()
-        assert "aistudio" in r.error
-    finally:
-        for k, v in saved.items():
-            if v is not None:
-                os.environ[k] = v
+def test_a_missing_key_fails_with_a_useful_message(tmp_path, monkeypatch):
+    """Hermetic on purpose. The first version of this test popped the key from the
+    environment but left the .env search alone, so the moment a real .env existed in
+    the repo the test started finding it and failing — a test that depends on the
+    developer's credentials is not a test."""
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    monkeypatch.chdir(tmp_path)                      # no .env at or above here
+    r = VV.run(tmp_path / "nonexistent.mp4", _truth())
+    assert r.error and "key" in r.error.lower(), r.error
+    assert "aistudio" in r.error
 
 
 def test_the_prompt_forbids_interpolating_a_denser_series():

@@ -128,18 +128,39 @@ class VlmRun:
         )
 
 
-def _client(api_key: str | None = None):
+TRANSIENT = ("503", "UNAVAILABLE", "429", "RESOURCE_EXHAUSTED", "RemoteProtocolError",
+             "Server disconnected")
+
+
+def _is_transient(msg: str) -> bool:
+    """Capacity, not correctness.
+
+    Every Gemini Flash tier returned 503 "high demand" on the first real run of this
+    harness, and Pro returned 429. Those say nothing about whether the model can do the
+    task, so they must be retried rather than recorded as a result — a benchmark that
+    reports "failed" when the answer is "come back later" is worse than no benchmark.
+    """
+    return any(t in msg for t in TRANSIENT)
+
+
+def _client(api_key: str | None = None, timeout_ms: int = 600_000):
     try:
         from google import genai
     except ImportError as e:  # pragma: no cover
         raise ImportError("needs the Gemini SDK: pip install google-genai") from e
+    if not (os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")):
+        from ..config import load_env
+        load_env()
     key = api_key or os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
     if not key:
         raise RuntimeError(
             "no Gemini key — set GEMINI_API_KEY in .env or the environment "
             "(get one at aistudio.google.com/apikey)"
         )
-    return genai.Client(api_key=key)
+    from google.genai import types
+    # A long clip plus a large structured answer takes minutes; the default timeout
+    # closes the connection first and it surfaces as "Server disconnected".
+    return genai.Client(api_key=key, http_options=types.HttpOptions(timeout=timeout_ms))
 
 
 def _upload(client, path: str | Path, timeout: float = 180.0):
@@ -184,7 +205,8 @@ def run(
     model: str = DEFAULT_MODEL,
     api_key: str | None = None,
     clip_starts_at: float | None = None,
-    max_output_tokens: int = 60000,
+    max_output_tokens: int = 40000,
+    attempts: int = 4,
 ) -> VlmRun:
     """Hand the whole clip to a video model and score what comes back.
 
@@ -204,23 +226,33 @@ def run(
         return out
 
     t0 = time.time()
-    try:
-        resp = client.models.generate_content(
-            model=model,
-            contents=[
-                types.Part.from_uri(file_uri=f.uri, mime_type=f.mime_type),
-                types.Part.from_text(text=PROMPT_FIELD),
-            ],
-            config=types.GenerateContentConfig(
-                system_instruction=SYSTEM,
-                response_mime_type="application/json",
-                response_schema=VideoTracking,
-                temperature=0.0,
-                max_output_tokens=max_output_tokens,
-            ),
-        )
-    except Exception as e:  # noqa: BLE001
-        out.error = f"{type(e).__name__}: {e}"
+    resp = None
+    for attempt in range(attempts):
+        try:
+            resp = client.models.generate_content(
+                model=model,
+                contents=[
+                    types.Part.from_uri(file_uri=f.uri, mime_type=f.mime_type),
+                    types.Part.from_text(text=PROMPT_FIELD),
+                ],
+                config=types.GenerateContentConfig(
+                    system_instruction=SYSTEM,
+                    response_mime_type="application/json",
+                    response_schema=VideoTracking,
+                    temperature=0.0,
+                    max_output_tokens=max_output_tokens,
+                ),
+            )
+            break
+        except Exception as e:  # noqa: BLE001
+            msg = f"{type(e).__name__}: {e}"
+            if _is_transient(msg) and attempt < attempts - 1:
+                time.sleep(5 * (attempt + 1))
+                continue
+            out.error = msg
+            return out
+    if resp is None:
+        out.error = "no response after retries"
         return out
     out.seconds = time.time() - t0
 

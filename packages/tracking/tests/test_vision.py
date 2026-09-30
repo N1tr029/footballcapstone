@@ -111,3 +111,32 @@ def test_guessed_landmarks_are_dropped():
     pairs, notes = V.to_correspondences(r, img, F.NFL, refine=False)
     assert pairs == []
     assert any("guessed" in n for n in notes)
+
+
+def test_turf_overlap_rejects_a_fit_that_left_the_field():
+    """The check that replaced asking the model to grade itself.
+
+    Shown a fit whose sidelines ran through the crowd, both gemini-3.5-flash and
+    flash-lite answered "good, off by 0.0 yards". Green pixels do not.
+    """
+    import cv2
+    from gridiron_tracking.detect.synthetic import sideline_camera
+
+    # A frame that is turf in the lower half and crowd-dark in the upper half.
+    img = np.zeros((720, 1280, 3), np.uint8)
+    img[:, :] = (40, 40, 40)
+    img[360:, :] = (40, 140, 60)          # BGR green
+
+    cam = sideline_camera(image_size=(1280, 720), height=25.0, y=-35.0)
+    good = cam.homography
+    on_grass = V.turf_overlap(img, good, F.NFL)
+
+    # The same fit pushed upward lands the field in the crowd.
+    import copy
+    drifted = copy.deepcopy(good)
+    drifted.H = good.H.copy()
+    drifted.H[1, 2] -= 260.0
+    off_grass = V.turf_overlap(img, drifted, F.NFL)
+
+    assert on_grass > off_grass, (on_grass, off_grass)
+    assert off_grass < 0.75, "a field projected into the crowd must fail the bar"

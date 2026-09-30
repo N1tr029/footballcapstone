@@ -437,6 +437,52 @@ def sanity_problems(
             if len(set(signs)) > 1:
                 out.append("the field projects to a self-crossing shape — the fit is folded")
 
+    out.extend(_correspondence_problems(correspondences or []))
+    return out
+
+
+def turf_overlap(img, h, spec: fieldmod.FieldSpec) -> float:
+    """What fraction of the projected field actually lands on grass.
+
+    This exists because asking the model to check its own drawing does not work. Shown
+    a fit whose sidelines ran through the crowd well above the real field, both
+    gemini-3.5-flash and flash-lite answered "good, off by 0.0 yards". A model will
+    rubber-stamp its own geometry, so the check has to be something that cannot be
+    talked into agreeing.
+
+    Green pixels can. A correct registration puts the playing surface on the playing
+    surface; a fit that has drifted into the stands or the stadium roof does not, and
+    the turf mask says so without an opinion.
+    """
+    try:
+        import cv2
+    except ImportError as e:  # pragma: no cover
+        raise ImportError("this check needs opencv") from e
+    from .lines import turf_mask
+
+    hgt, wid = img.shape[:2]
+    turf = turf_mask(img)
+
+    # Sample the field on a grid, project, and ask how many landed on grass.
+    xs = np.linspace(spec.goal_a, spec.goal_b, 24)
+    ys = np.linspace(0.0, spec.width, 12)
+    pts = np.array([[x, y] for x in xs for y in ys])
+    px = h.to_image(pts)
+    good = inside = 0
+    for u, v in px:
+        if not (np.isfinite(u) and np.isfinite(v)):
+            continue
+        iu, iv = int(round(u)), int(round(v))
+        if not (0 <= iu < wid and 0 <= iv < hgt):
+            continue
+        inside += 1
+        if turf[iv, iu] > 0:
+            good += 1
+    return good / inside if inside else 0.0
+
+
+def _correspondence_problems(correspondences: list) -> list[str]:
+    out: list[str] = []
     if correspondences:
         fx = sorted({round(p[0][0], 2) for p in correspondences})
         fy = sorted({round(p[0][1], 2) for p in correspondences})
@@ -616,6 +662,12 @@ def auto_register(img, client=None, verify: bool = True, **extra) -> AutoRegistr
 
     hgt, wid = img.shape[:2]
     out.problems.extend(sanity_problems(h, (wid, hgt), out.spec, correspondences=pairs))
+    frac = turf_overlap(img, h, out.spec)
+    if frac < 0.75:
+        out.problems.append(
+            f"only {frac * 100:.0f}% of the projected field lands on grass — "
+            "the fit has drifted off the playing surface"
+        )
     if out.problems:
         out.verdict = "failed sanity"
         return out

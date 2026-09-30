@@ -3,7 +3,7 @@ name = "gridiron-tracking"
 version = "0.1.0"
 description = "Footage to tracking data — detection, field registration, multi-object tracking in field coordinates"
 requires-python = ">=3.11"
-dependencies = ["numpy>=1.26", "scipy>=1.11", "pandas>=2.1", "pyarrow>=14"]
+dependencies = ["numpy>=1.26", "scipy>=1.11", "pandas>=2.1", "pyarrow>=14", "pydantic>=2.7"]
 
 # Nothing above this line touches a pixel. The contract, the field geometry, the
 # homography maths, the filters and the whole benchmark scorer run on a laptop
@@ -12,6 +12,8 @@ dependencies = ["numpy>=1.26", "scipy>=1.11", "pandas>=2.1", "pyarrow>=14"]
 [project.optional-dependencies]
 video = ["opencv-python>=4.9"]
 detect = ["ultralytics>=8.1"]
+# Reading the field with a vision model, so registration stops being manual.
+vision = ["anthropic>=1.0", "opencv-python>=4.9"]
 
 [build-system]
 requires = ["setuptools>=68"]

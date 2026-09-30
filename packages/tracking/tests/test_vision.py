@@ -18,7 +18,7 @@ def test_the_schema_always_offers_a_way_to_say_i_cannot_tell():
     """A field with no honest 'unknown' value is a field that gets filled dishonestly."""
     r = V.FieldReading.model_fields
     assert "unclear" in str(r["level"].annotation)
-    assert "unclear" in str(r["numbers_increase_toward"].annotation)
+    assert "unclear" in str(r["numbers_decrease_toward"].annotation)
     assert "none_visible" in str(r["end_zone_at"].annotation)
     assert "not_visible" in str(r["far_sideline_at"].annotation)
     assert r["down_marker_number"].default is None
@@ -92,7 +92,7 @@ def test_reading_with_nothing_readable_yields_no_correspondences():
     img = np.zeros((720, 1280, 3), np.uint8)
     r = V.FieldReading(
         landmarks=[], down_marker_number=None, yard_numbers=[],
-        numbers_increase_toward="unclear", end_zone_at="none_visible",
+        numbers_decrease_toward="unclear", end_zone_at="none_visible",
         far_sideline_at="not_visible", near_sideline_visible=False,
         camera_view="unclear", level="unclear", team_colors=[], notes="unreadable",
     )
@@ -104,7 +104,7 @@ def test_guessed_landmarks_are_dropped():
     img = np.zeros((720, 1280, 3), np.uint8)
     r = V.FieldReading(
         landmarks=[V.Landmark(kind="far_sideline", p1=[0.1, 0.4], p2=[0.9, 0.38], confidence="guess")],
-        down_marker_number=None, yard_numbers=[], numbers_increase_toward="unclear",
+        down_marker_number=None, yard_numbers=[], numbers_decrease_toward="unclear",
         end_zone_at="none_visible", far_sideline_at="top", near_sideline_visible=False,
         camera_view="unclear", level="nfl", team_colors=[], notes="",
     )

@@ -33,6 +33,10 @@ import numpy as np
 
 from .contract import PlayTrack
 
+PANEL_RULE_PX = 4
+"""A hairline between the two panels. Without it the clip's own dark edge and the top of
+the board run together and the pair reads as one picture."""
+
 
 @dataclass
 class FrameCheck:
@@ -221,7 +225,10 @@ def side_by_side(
 
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    vw = cv2.VideoWriter(str(out_path), cv2.VideoWriter_fourcc(*"mp4v"), out_fps, (fw, fh * 2))
+    SEP = PANEL_RULE_PX
+    vw = cv2.VideoWriter(str(out_path), cv2.VideoWriter_fourcc(*"mp4v"), out_fps,
+                         (fw, fh * 2 + SEP))
+    rule = np.full((SEP, fw, 3), (60, 60, 60), np.uint8)
 
     PADP = 30
     sx = lambda x: int(PADP + (x / spec.length) * (fw - 2 * PADP))          # noqa: E731
@@ -235,6 +242,15 @@ def side_by_side(
         major = int(x) % 10 == 0
         cv2.line(board, (sx(x), sy(0)), (sx(x), sy(spec.width)),
                  (150, 170, 150) if major else (92, 112, 92), 2 if major else 1)
+        if major and spec.goal_a < x < spec.goal_b:
+            # The painted number, so a position in this panel can be read off against the
+            # same number in the frame above it rather than counted out in stripes.
+            n = int(round(50.0 - abs(x - 60.0)))
+            for yy in (spec.width - 9.0, 9.0):
+                t = str(n)
+                w_ = cv2.getTextSize(t, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)[0][0]
+                cv2.putText(board, t, (sx(x) - w_ // 2, sy(yy)),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (128, 148, 128), 1, cv2.LINE_AA)
     for x in (0, spec.goal_a, spec.goal_b, spec.length):
         cv2.line(board, (sx(x), sy(0)), (sx(x), sy(spec.width)), (215, 230, 215), 2)
     lo, hi = spec.hashes
@@ -242,9 +258,24 @@ def side_by_side(
         for hy in (lo, hi):
             cv2.line(board, (sx(x), sy(hy) - 3), (sx(x), sy(hy) + 3), (108, 128, 108), 1)
 
-    def label(img, txt, y):
-        cv2.putText(img, txt, (14, y), cv2.FONT_HERSHEY_SIMPLEX, 0.52, (0, 0, 0), 4)
-        cv2.putText(img, txt, (14, y), cv2.FONT_HERSHEY_SIMPLEX, 0.52, (240, 240, 240), 1)
+    def label(img, lines_, corner="tl"):
+        """A caption block on a strip of its own, so it never sits on the play.
+
+        The first version wrote three captions at fixed heights over the picture and they
+        landed on top of each other and on the players. A panel you have to squint past is
+        a panel nobody checks.
+        """
+        pad, lh = 10, 20
+        wid = max(cv2.getTextSize(t, cv2.FONT_HERSHEY_SIMPLEX, 0.48, 1)[0][0] for t in lines_) + 2 * pad
+        hgt_ = lh * len(lines_) + pad
+        x0 = 8 if corner.endswith("l") else img.shape[1] - wid - 8
+        y0 = 8
+        strip = img[y0:y0 + hgt_, x0:x0 + wid]
+        if strip.size:
+            img[y0:y0 + hgt_, x0:x0 + wid] = (0.35 * strip).astype(np.uint8)
+        for i, t in enumerate(lines_):
+            cv2.putText(img, t, (x0 + pad, y0 + lh * (i + 1) - 4),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.48, (238, 238, 238), 1, cv2.LINE_AA)
 
     try:
         for f in track.frames:
@@ -268,13 +299,30 @@ def side_by_side(
                     c = COL.get(team, (150, 150, 150))
                     hit = any(_inside(p, b, pad) for b in boxes)
                     on, off = on + int(hit), off + int(not hit)
+                    # A ring on the ground the player is standing on, not a dot floating
+                    # at his feet. The position being drawn *is* the ground point, and a
+                    # flat ellipse says so — a filled circle there reads as a mislaid
+                    # marker even when it is exactly right, which cost an hour of looking
+                    # for a vertical bias that was not there (measured: 0.1 px).
+                    rx = 11
+                    for b in boxes:
+                        if _inside(p, b, pad):
+                            rx = max(7, int((b[2] - b[0]) * 0.55))
+                            break
+                    ctr = tuple(p.astype(int))
                     if hit:
-                        cv2.circle(left, tuple(p.astype(int)), 8, c, -1, cv2.LINE_AA)
+                        cv2.ellipse(left, ctr, (rx, max(3, rx // 3)), 0, 0, 360, c, 2, cv2.LINE_AA)
+                        cv2.circle(left, ctr, 3, c, -1, cv2.LINE_AA)
                     else:
-                        cv2.circle(left, tuple(p.astype(int)), 9, (0, 0, 255), 2, cv2.LINE_AA)
-            label(left, "recreation drawn back onto the clip - filled = on a detected player, "
-                        "red ring = on nobody", 24)
-            label(left, f"{on} of {on + off} agree", 48)
+                        cv2.ellipse(left, ctr, (rx, max(3, rx // 3)), 0, 0, 360,
+                                    (0, 0, 255), 2, cv2.LINE_AA)
+                        cv2.line(left, (ctr[0] - rx, ctr[1] - rx), (ctr[0] + rx, ctr[1] + rx),
+                                 (0, 0, 255), 2, cv2.LINE_AA)
+            label(left, [
+                "THE CLIP, with the recreation drawn back onto it",
+                "team ring = lands on a detected player    red cross = lands on nobody",
+                f"{on} of {on + off} agree" + (f"   t {f.t:+.1f}s" if True else ""),
+            ])
 
             right = board.copy()
             for pid, p in f.players.items():
@@ -285,9 +333,12 @@ def side_by_side(
                 cv2.circle(right, (sx(f.ball.x), sy(f.ball.y)), 9, (25, 35, 55), -1, cv2.LINE_AA)
                 cv2.circle(right, (sx(f.ball.x), sy(f.ball.y)), 6,
                            (235, 245, 250) if seen else (120, 185, 215), -1, cv2.LINE_AA)
-            label(right, f"t {f.t:+.1f}s   {len(f.players)} players   far sideline at top, as filmed", 24)
+            label(right, [
+                "THE RECREATION, same instant, seen from above",
+                f"t {f.t:+.1f}s   {len(f.players)} players   far sideline at top, as filmed",
+            ])
 
-            vw.write(np.vstack([left, right]))
+            vw.write(np.vstack([left, rule, right]))
     finally:
         vw.release()
     return out_path

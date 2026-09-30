@@ -93,4 +93,5 @@ def test_side_by_side_writes_a_playable_file(tmp_path):
     ok, img = cap.read()
     cap.release()
     assert ok, "the file must be readable"
-    assert img.shape[0] == 180 * 2, "both panels must be stacked"
+    assert img.shape[0] == 180 * 2 + VER.PANEL_RULE_PX, \
+        "both panels must be stacked, separated by the hairline rule"

@@ -41,6 +41,11 @@ class PipelineConfig:
     process_noise: float = 6.0
     measurement_noise: float = 0.35
     smooth_window: int = 7
+    team_cost: float = 0.0
+    """How many yards of distance a disagreement about which team a detection belongs to
+    is worth, when matching it to a track. Zero ignores the kit entirely, which is what
+    the tracker did before and what makes two crossing players a coin toss."""
+
     oracle_association: bool = False
     """Match detections to tracks by their ground-truth label rather than by
     distance. Benchmark-only, and the whole point of it is to be turned off again."""
@@ -85,6 +90,7 @@ def run(
         process_noise=config.process_noise,
         measurement_noise=config.measurement_noise,
         oracle_association=config.oracle_association,
+        team_cost=config.team_cost,
     )
 
     n_detections = 0

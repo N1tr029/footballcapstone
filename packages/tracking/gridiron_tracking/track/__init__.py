@@ -92,6 +92,7 @@ class FieldTracker:
         process_noise: float = 6.0,
         measurement_noise: float = 0.35,
         oracle_association: bool = False,
+        team_cost: float = 0.0,
     ) -> None:
         self.dt = dt
         # When on, detections that carry a ground-truth label are matched to the
@@ -100,6 +101,7 @@ class FieldTracker:
         # association costs from what registration and smoothing cost, and there is
         # no other way to separate those two.
         self.oracle_association = oracle_association
+        self.team_cost = team_cost
         self.gate = gate_yards
         self.max_age = max_age
         self.min_hits = min_hits
@@ -159,7 +161,7 @@ class FieldTracker:
             if v > MAX_SPEED_YPS:
                 t.x[2:] *= MAX_SPEED_YPS / v
 
-        matched_tracks, matched_dets = self._associate(points, labels)
+        matched_tracks, matched_dets = self._associate(points, labels, teams)
 
         for ti, di in zip(matched_tracks, matched_dets):
             t = self.tracks[ti]
@@ -183,13 +185,35 @@ class FieldTracker:
         self.tracks = [t for t in self.tracks if frame - t.last_seen <= self.max_age]
 
     def _associate(
-        self, points: np.ndarray, labels: list[str | None] | None = None
+        self,
+        points: np.ndarray,
+        labels: list[str | None] | None = None,
+        teams: list[str | None] | None = None,
     ) -> tuple[list[int], list[int]]:
         if not self.tracks or not len(points):
             return [], []
         pred = np.array([t.position for t in self.tracks])
         cost = np.linalg.norm(pred[:, None, :] - points[None, :, :], axis=-1)
         gated = np.where(cost <= self.gate, cost, 1e6)
+
+        # A kit is evidence about identity, and distance alone throws it away. Two players
+        # crossing are a coin toss for a position-only tracker and are not remotely
+        # ambiguous to look at: one is in white and one is in purple. Their jerseys
+        # separate by 113 Lab units on the reference clip, so this is among the most
+        # reliable signals available, and it is only used where both sides are confident.
+        #
+        # A penalty rather than a veto. The team on a track is a running vote and the team
+        # on a detection is a cluster assignment, and both are occasionally wrong; making
+        # a disagreement expensive lets an otherwise perfect match still win, while a hard
+        # ban would strand a player whose colour was misread once.
+        if self.team_cost > 0 and teams is not None and any(teams):
+            track_team = [t.team() for t in self.tracks]
+            for ri, tt in enumerate(track_team):
+                if tt is None:
+                    continue
+                for ci, dt_ in enumerate(teams):
+                    if dt_ is not None and dt_ != tt and gated[ri, ci] < 1e6:
+                        gated[ri, ci] = gated[ri, ci] + self.team_cost
 
         if self.oracle_association and labels is not None:
             known = np.array([[t.label()] for t in self.tracks], dtype=object)

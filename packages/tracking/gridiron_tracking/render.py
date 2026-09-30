@@ -56,6 +56,7 @@ class RenderResult:
     n_boxes: int = 0
     team_separation: float = 0.0
     ball: Any = None
+    markers: Any = None
     stages: dict[str, str] = dc_field(default_factory=dict)
     problems: list[str] = dc_field(default_factory=list)
     seconds: float = 0.0
@@ -90,6 +91,11 @@ class RenderResult:
             lines.append(f"  team separation   {self.team_separation:.0f} Lab units")
         if self.ball is not None:
             lines.append(f"  {self.ball.summary()}")
+        if self.markers is not None and self.markers.samples:
+            m = self.markers
+            lines.append(f"  yards, vs truth   {m.measured:.2f} measured against "
+                         f"{m.stated_yards:.0f} stated by the broadcast "
+                         f"({m.error_yards:+.2f} yd)")
         lines.append(f"  stages            " + ", ".join(f"{k}:{v}" for k, v in self.stages.items()))
         if self.video:
             lines.append(f"  side by side      {self.video}")
@@ -192,6 +198,8 @@ def _register(spec: ClipSpec, frames: dict[int, np.ndarray], n_src: int,
     )
     rep = prop.build(_FrameBag(frames), ordered[0], ordered[-1] + 1, spec.step)
     log(f"    propagation: {rep.summary()}")
+    if spec.register.resnap:
+        prop.resnap(frames, field_spec, log=log)
     if rep.coverage < 0.9:
         problems.append(f"camera motion only solved on {rep.coverage * 100:.0f}% of frames")
     return base, field_spec, stage, problems, prop
@@ -297,6 +305,43 @@ class _FrameBag:
         for i in sorted(self._f):
             if start <= i < stop and (i - start) % step == 0:
                 yield i, self._f[i]
+
+
+def _label_kits(spec: ClipSpec, frames, boxes, log) -> float:
+    """Put a team on every detection, before tracking, so the tracker can use it.
+
+    The same clustering that names the sides afterwards, run early and on detections
+    rather than tracks. It is cruder — a detection votes once and there is no pooling
+    across a play to steady it — and it is not what the output's team labels come from.
+    Its only job is to make two crossing players distinguishable to the matcher, which
+    distance alone cannot do.
+    """
+    from .detect.color import cluster_teams, separation, torso_color
+
+    samples, index = {}, []
+    for fi, dets in boxes.items():
+        img = frames.get(fi)
+        if img is None:
+            continue
+        for k, d in enumerate(dets):
+            c = torso_color(img, d)
+            if c is None:
+                continue
+            key = f"{fi}:{k}"
+            samples[key] = [c[1:] if spec.track.chroma_only else c]
+            index.append((fi, k, key))
+    if len(samples) < 2:
+        return 0.0
+    assign, centres = cluster_teams(samples, k=spec.track.team_clusters)
+    sizes = {c: sum(1 for v in assign.values() if v == c) for c in set(assign.values())}
+    ranked = sorted(sizes, key=lambda c: -sizes[c])
+    naming = {c: n for c, n in zip(ranked, ["kitA", "kitB", "kitC"])}
+    for fi, k, key in index:
+        boxes[fi][k].team = naming.get(assign.get(key))
+    sep = separation(np.array([centres[c] for c in ranked[:2]])) if len(ranked) >= 2 else 0.0
+    log(f"    kits before tracking: {dict((naming[c], sizes[c]) for c in ranked)}, "
+        f"separation {sep:.0f} Lab units")
+    return sep
 
 
 def _teams(spec: ClipSpec, track: PlayTrack, frames, rects, reg, fps: float,
@@ -531,6 +576,9 @@ def render(spec: ClipSpec, root: Path = RUN_DIR, force=(), log=print) -> RenderR
              for k, v in boxes.items()}
     res.n_boxes = sum(len(v) for v in boxes.values())
 
+    if spec.track.pre_teams:
+        _label_kits(spec, frames, boxes, log)
+
     by_index = {i: boxes.get(f, []) for i, f in enumerate(ordered)}
 
     class _Seq:
@@ -553,6 +601,7 @@ def render(spec: ClipSpec, root: Path = RUN_DIR, force=(), log=print) -> RenderR
         measurement_noise=spec.track.measurement_noise,
         smooth_window=spec.track.smooth_window,
         keep_unlabelled=spec.track.keep_unlabelled,
+        team_cost=spec.track.team_cost,
     )
     out = run_pipeline(_Seq(), _ByWindowIndex(src_reg, ordered), len(ordered), cfg)
     if spec.track.stitch:
@@ -585,6 +634,14 @@ def render(spec: ClipSpec, root: Path = RUN_DIR, force=(), log=print) -> RenderR
 
     res.report = verifymod.verify(out.track, timed, rects, fps=fps, frame_offset=offset)
 
+    if spec.distance_yards:
+        from .broadcast import check_markers
+        res.markers = check_markers(frames, src_reg, spec.distance_yards)
+        if res.markers.samples:
+            log(f"    broadcast markers: {res.markers.measured:.2f} yd measured against "
+                f"{spec.distance_yards:.0f} stated "
+                f"({res.markers.error_yards:+.2f}, scatter {res.markers.straightness:.2f})")
+
     if spec.track.ball:
         try:
             res.ball = _ball(spec, out.track, frames, src_reg, fps, offset, log)
@@ -601,7 +658,10 @@ def render(spec: ClipSpec, root: Path = RUN_DIR, force=(), log=print) -> RenderR
     res.stages["render"] = "computed"
 
     (out_dir / "track.json").write_text(json.dumps(out.track.to_json()))
-    (out_dir / "report.txt").write_text(res.report.table() + "\n")
+    report_txt = res.report.table()
+    if res.markers is not None and res.markers.samples:
+        report_txt += "\n\n" + res.markers.table()
+    (out_dir / "report.txt").write_text(report_txt + "\n")
     (out_dir / "spec.json").write_text(json.dumps(spec.to_json(), indent=2) + "\n")
     res.seconds = time.time() - t0
     return res

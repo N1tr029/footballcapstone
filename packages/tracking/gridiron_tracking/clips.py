@@ -101,6 +101,11 @@ class RegisterSpec:
     believed. Around 1.0 the lines are landing on grass at chance — which is what the
     fit that scored 90.3% on its own reprojection was doing."""
 
+    resnap: bool = True
+    """After propagating, pull each frame's map back onto that frame's own painted lines.
+    Propagation drifts — 3.53 alignment at the anchor down to 1.35 five seconds later on
+    the reference clip — and the paint is there on every frame to correct it."""
+
     min_inliers: int = 25
     horizon_frac: float = 0.35
     """Ignore this fraction of the image from the top when measuring camera motion. The
@@ -145,6 +150,14 @@ class TrackSpec:
     same samples. The officials cost less as a handful of misassigned tracks than a
     halved team does."""
 
+    team_cost: float = 0.0
+    """Yards of penalty for matching a detection to a track of the other team. Needs
+    ``pre_teams``; without a team on the detections there is nothing to disagree with."""
+
+    pre_teams: bool = False
+    """Cluster jersey colour before tracking as well as after, so the tracker can use it
+    to tell two crossing players apart."""
+
     stitch: bool = True
     """Rejoin tracks that are one player, after the play. See
     :mod:`~gridiron_tracking.stitch`; the online tracker cannot do this and parameter
@@ -185,6 +198,14 @@ class ClipSpec:
     snap_frame: int | None = None
     fps: float | None = None
     out_fps: int = 12
+    distance_yards: float | None = None
+    """The distance the down-and-distance graphic states, e.g. 6 for "2nd & 6".
+
+    The only external ground truth a broadcast clip carries. See
+    :mod:`~gridiron_tracking.broadcast`: the virtual line of scrimmage and the virtual
+    first-down line are this far apart, so measuring them through the registration checks
+    the scale in yards against somebody else's chain."""
+
     title: str = ""
     notes: str = ""
     detect: DetectSpec = dc_field(default_factory=DetectSpec)

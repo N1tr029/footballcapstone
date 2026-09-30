@@ -210,23 +210,94 @@ class PropagatedRegistration:
     # ----------------------------------------------------------------- checks
 
     def drift_yards(self, frame_index: int, probe=None) -> float:
-        """How far a fixed point on the field has wandered by this frame.
+        """Deprecated: this measured nothing and returned 0.0 on every frame.
 
-        Takes a handful of field positions, pushes them to pixels through the
-        anchor's map and back through this frame's, and reports the distance. It is
-        the honest way to see a chain of homographies slowly failing, and it needs no
-        ground truth — only the assumption that the field did not move.
+        It pushed field points to pixels and back through the *same* homography, which is
+        an exact inverse by construction, so it reported perfect stability on a chain of
+        composed estimates that may have been drifting badly. Sampled across the reference
+        clip it returned 0.0 six times out of six.
+
+        That is the same mistake as the registration it was meant to police: a round trip
+        through one map cannot see whether the map is right. Use :meth:`paint_drift`,
+        which needs the pixels and so can disagree with the arithmetic.
         """
-        h = self.at(frame_index)
-        if h is None:
-            return float("nan")
-        if probe is None:
-            probe = np.array([
-                [self.spec.goal_a, 0.0], [self.spec.goal_b, 0.0],
-                [self.spec.goal_a, self.spec.width], [self.spec.goal_b, self.spec.width],
-                [60.0, self.spec.mid_y],
-            ])
-        px = h.to_image(probe)
-        back = h.to_field(px)
-        d = np.linalg.norm(back - probe, axis=1)
-        return float(np.nanmax(d))
+        import warnings
+
+        warnings.warn(
+            "drift_yards round-trips through a single homography and always returns 0; "
+            "use paint_drift(frames, spec), which checks against the paint",
+            DeprecationWarning, stacklevel=2,
+        )
+        return float("nan")
+
+    def resnap(self, frames: dict, spec=None, min_score: float = 1.3, log=None) -> dict:
+        """Pull every frame's map back onto that frame's paint.
+
+        Propagation composes one homography per hop and the errors multiply, so the chain
+        is exact at the anchor and progressively invented after it. Measured on the
+        reference clip: paint alignment 3.53 on the anchor frame, 2.6 in the middle, 1.35
+        by the end — the last second of the play registered barely better than chance
+        while every inlier count along the way looked healthy.
+
+        The correction needs no model and no operator. Each frame already has an estimate
+        good to a yard or so, and each frame has its own painted lines; snapping the
+        estimate onto them turns a chain that drifts into a chain that is re-grounded
+        every frame. Propagation still does the work of getting close — the snap has a
+        search window narrower than the gap between yard lines, so it can only correct a
+        fit that is nearly right, and on a frame where the paint is hidden it correctly
+        declines and the propagated estimate stands.
+        """
+        from .vision import paint_alignment, snap_to_paint
+
+        spec = spec or self.spec
+        before, after, fixed = [], [], 0
+        for i in sorted(frames):
+            h = self.at(i)
+            if h is None:
+                continue
+            b = paint_alignment(frames[i], h, spec)
+            if b != b or b >= 6.0:
+                continue
+            h2, a = snap_to_paint(frames[i], h, spec, rounds=2)
+            before.append(b)
+            if a > b and a >= min_score:
+                self._H[i] = h2.H.copy()
+                after.append(a)
+                fixed += 1
+            else:
+                after.append(b)
+        out = {
+            "frames": len(before), "resnapped": fixed,
+            "before": float(np.median(before)) if before else float("nan"),
+            "after": float(np.median(after)) if after else float("nan"),
+            "worst_before": float(np.min(before)) if before else float("nan"),
+            "worst_after": float(np.min(after)) if after else float("nan"),
+        }
+        if log:
+            log(f"    re-snapped {fixed}/{out['frames']} frames onto the paint: "
+                f"median alignment {out['before']:.2f} -> {out['after']:.2f}, "
+                f"worst {out['worst_before']:.2f} -> {out['worst_after']:.2f}")
+        return out
+
+    def paint_drift(self, frames: dict, spec=None, every: int = 25) -> dict[int, float]:
+        """Paint alignment at frames across the clip, so drift is visible rather than assumed.
+
+        Propagation composes one homography per hop and errors multiply, so a chain that is
+        perfect at the anchor can be yards out by the end of a play. The only check that
+        can see that without ground truth is the one that looks at the picture: are this
+        frame's drawn yard lines still on this frame's painted ones?
+
+        Returns the score per sampled frame. A run that starts near 3 and ends near 1 has
+        drifted into nonsense however clean its inlier counts looked.
+        """
+        from .vision import paint_alignment
+
+        spec = spec or self.spec
+        out: dict[int, float] = {}
+        for i in sorted(frames)[::max(1, every)]:
+            h = self.at(i)
+            if h is None:
+                out[i] = float("nan")
+                continue
+            out[i] = paint_alignment(frames[i], h, spec)
+        return out

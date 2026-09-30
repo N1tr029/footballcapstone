@@ -73,3 +73,24 @@ def test_the_worst_player_is_identifiable():
         f.players["p2"].x += 6.0
     rep = VER.verify(bad, _Reg(cam), boxes, fps=10.0)
     assert rep.worst_players(1)[0].player_id == "p2"
+
+
+def test_side_by_side_writes_a_playable_file(tmp_path):
+    """The validation artifact is worth a test of its own — it is the thing a person
+    actually looks at, and a renderer that silently writes nothing is worse than one
+    that fails."""
+    import cv2
+    from gridiron_tracking import field as F
+
+    cam = sideline_camera(image_size=(320, 180), height=30.0, y=-40.0)
+    t = _track(n=6, players=3)
+    boxes = _boxes_from(t, cam, fps=10.0)
+    frames = {int(round(f.t * 10.0)): np.zeros((180, 320, 3), np.uint8) for f in t.frames}
+    out = VER.side_by_side(tmp_path / "sbs.mp4", t, _Reg(cam), frames, boxes,
+                           spec=F.NCAA, fps=10.0, out_fps=6)
+    assert out.exists() and out.stat().st_size > 0
+    cap = cv2.VideoCapture(str(out))
+    ok, img = cap.read()
+    cap.release()
+    assert ok, "the file must be readable"
+    assert img.shape[0] == 180 * 2, "both panels must be stacked"

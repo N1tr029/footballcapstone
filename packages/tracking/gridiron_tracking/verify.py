@@ -181,3 +181,113 @@ def _to_image(registration, frame_index: int, field_pts):
     if h is None:
         return np.full((len(field_pts), 2), np.nan)
     return h.to_image(field_pts)
+
+
+def side_by_side(
+    out_path,
+    track: PlayTrack,
+    registration,
+    frames: dict,
+    boxes_by_frame: dict[int, list],
+    spec,
+    fps: float = 30.0,
+    frame_offset: int = 0,
+    out_fps: int = 12,
+    pad: float = 6.0,
+    team_colors: dict | None = None,
+    ball_seen_at=None,
+):
+    """The clip with the recreation drawn on it, above the top-down view.
+
+    This is the artifact worth producing on every run. The numbers above say *how much*
+    agrees; this says *which player, on which frame*, and it needs no ground truth to
+    read — a filled dot sitting on a player is right, a red ring on grass is wrong, and
+    anyone can see the difference without being told what to look for.
+
+    The two panels share a clock and an orientation: the top-down view is drawn with
+    the far sideline at the top, matching how the camera sees it, so a player in one
+    panel is in the same place in the other. Flipping one relative to the other makes
+    the whole thing unreadable, which is a mistake worth not repeating.
+    """
+    try:
+        import cv2
+    except ImportError as e:  # pragma: no cover
+        raise ImportError("this needs opencv") from e
+    from pathlib import Path
+
+    COL = team_colors or {"teamA": (59, 169, 242), "teamB": (232, 168, 79)}
+    any_frame = next(iter(frames.values()))
+    fh, fw = any_frame.shape[:2]
+
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    vw = cv2.VideoWriter(str(out_path), cv2.VideoWriter_fourcc(*"mp4v"), out_fps, (fw, fh * 2))
+
+    PADP = 30
+    sx = lambda x: int(PADP + (x / spec.length) * (fw - 2 * PADP))          # noqa: E731
+    sy = lambda y: int(PADP + ((spec.width - y) / spec.width) * (fh - 2 * PADP))  # noqa: E731
+
+    board = np.full((fh, fw, 3), (22, 26, 20), np.uint8)
+    cv2.rectangle(board, (sx(0), sy(spec.width)), (sx(spec.length), sy(0)), (38, 64, 34), -1)
+    for a, b in ((0, spec.goal_a), (spec.goal_b, spec.length)):
+        cv2.rectangle(board, (sx(a), sy(spec.width)), (sx(b), sy(0)), (28, 50, 26), -1)
+    for x in np.arange(spec.goal_a, spec.goal_b + 0.01, 5.0):
+        major = int(x) % 10 == 0
+        cv2.line(board, (sx(x), sy(0)), (sx(x), sy(spec.width)),
+                 (150, 170, 150) if major else (92, 112, 92), 2 if major else 1)
+    for x in (0, spec.goal_a, spec.goal_b, spec.length):
+        cv2.line(board, (sx(x), sy(0)), (sx(x), sy(spec.width)), (215, 230, 215), 2)
+    lo, hi = spec.hashes
+    for x in np.arange(spec.goal_a + 1, spec.goal_b, 1.0):
+        for hy in (lo, hi):
+            cv2.line(board, (sx(x), sy(hy) - 3), (sx(x), sy(hy) + 3), (108, 128, 108), 1)
+
+    def label(img, txt, y):
+        cv2.putText(img, txt, (14, y), cv2.FONT_HERSHEY_SIMPLEX, 0.52, (0, 0, 0), 4)
+        cv2.putText(img, txt, (14, y), cv2.FONT_HERSHEY_SIMPLEX, 0.52, (240, 240, 240), 1)
+
+    try:
+        for f in track.frames:
+            src = int(round(f.t * fps)) + frame_offset
+            if src not in frames:
+                continue
+            left = frames[src].copy()
+            boxes = boxes_by_frame.get(src, [])
+            for b in boxes:
+                cv2.rectangle(left, (int(b[0]), int(b[1])), (int(b[2]), int(b[3])), (70, 70, 70), 1)
+
+            h = registration.at(src) if hasattr(registration, "at") else None
+            on = off = 0
+            if h is not None and f.players:
+                ids = list(f.players)
+                px = np.atleast_2d(h.to_image([[f.players[i].x, f.players[i].y] for i in ids]))
+                for pid, p in zip(ids, px):
+                    if not np.isfinite(p).all():
+                        continue
+                    team = track.roster[pid].team if pid in track.roster else "other"
+                    c = COL.get(team, (150, 150, 150))
+                    hit = any(_inside(p, b, pad) for b in boxes)
+                    on, off = on + int(hit), off + int(not hit)
+                    if hit:
+                        cv2.circle(left, tuple(p.astype(int)), 8, c, -1, cv2.LINE_AA)
+                    else:
+                        cv2.circle(left, tuple(p.astype(int)), 9, (0, 0, 255), 2, cv2.LINE_AA)
+            label(left, "recreation drawn back onto the clip - filled = on a detected player, "
+                        "red ring = on nobody", 24)
+            label(left, f"{on} of {on + off} agree", 48)
+
+            right = board.copy()
+            for pid, p in f.players.items():
+                team = track.roster[pid].team if pid in track.roster else "other"
+                cv2.circle(right, (sx(p.x), sy(p.y)), 8, COL.get(team, (150, 150, 150)), -1, cv2.LINE_AA)
+            if f.ball is not None:
+                seen = ball_seen_at(f.t) if callable(ball_seen_at) else True
+                cv2.circle(right, (sx(f.ball.x), sy(f.ball.y)), 9, (25, 35, 55), -1, cv2.LINE_AA)
+                cv2.circle(right, (sx(f.ball.x), sy(f.ball.y)), 6,
+                           (235, 245, 250) if seen else (120, 185, 215), -1, cv2.LINE_AA)
+            label(right, f"t {f.t:+.1f}s   {len(f.players)} players   far sideline at top, as filmed", 24)
+
+            vw.write(np.vstack([left, right]))
+    finally:
+        vw.release()
+    return out_path

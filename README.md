@@ -65,6 +65,22 @@ and describe what actually happened. `C` means complete, `I` incomplete, and
 `IN` interception. These outcomes do not prove whether a recommendation was
 correct.
 
+If every modeled receiver is predicted to be closer than 3 yards to a defender,
+the report recommends a running play; on fourth down it recommends a punt. This
+is a simple threshold. The Kaggle download contains pass plays only, so it cannot
+provide examples of run-play reviews by itself. To include those, download the
+public 2023 play-by-play file from nflverse into the `data/` folder:
+
+```bash
+curl -L "https://github.com/nflverse/nflverse-data/releases/download/pbp/play_by_play_2023.csv" \
+  -o data/play_by_play_2023.csv
+```
+
+With that file present, a run is flagged as unsuccessful if it loses yards,
+gains zero yards, loses a fumble, or fails to reach the line to gain on third or
+fourth down. Such plays receive `suggest_pass_next_time`. These are rule-based
+prompts for review, not learned counterfactuals.
+
 These reports are exploratory. The competition files focus on player movement,
 not labeled quarterback decision quality. Tracking data alone cannot establish
 what the quarterback saw, whether the pass was catchable, or what would have

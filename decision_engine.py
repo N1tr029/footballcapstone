@@ -21,6 +21,7 @@ KEYS = ["game_id", "play_id", "nfl_id"]
 ID_FRAME = KEYS + ["frame_id"]
 NUMERIC = ["x", "y", "s", "a", "dir", "o", "ball_land_x", "ball_land_y", "absolute_yardline_number"]
 ROLES = {"Passer": 0, "Targeted Receiver": 1, "Other Route Runner": 2, "Defensive Coverage": 3}
+OPEN_SEPARATION_YARDS = 3.0
 
 
 def read_weeks(data_dir: Path, weeks: list[int]) -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -153,7 +154,20 @@ def decisions(state: pd.DataFrame, predictions: pd.DataFrame, data_dir: Path) ->
         gain = alt_sep - actual_sep if alt_sep is not None else None
         # Typed judgment schema inspired by lightweight decision engines: bounded choice,
         # probabilities, confidence, and concise evidence instead of free-form claims.
-        if gain is not None and gain >= 1.5:
+        best_sep = max([value for value in (actual_sep, alt_sep) if value is not None])
+        down = None
+        if not supplementary.empty:
+            ctx = supplementary[(supplementary.game_id == game_id) & (supplementary.play_id == play_id)]
+            if not ctx.empty and "down" in ctx:
+                down = pd.to_numeric(ctx.iloc[0].down, errors="coerce")
+        if best_sep < OPEN_SEPARATION_YARDS:
+            if down == 4:
+                choice, status = "suggest_punt", "no_receiver_open_on_fourth_down"
+                probs = {"pass": 0.1, "run": 0.2, "punt": 0.7}
+            else:
+                choice, status = "suggest_run_play", "no_receiver_open"
+                probs = {"pass": 0.2, "run": 0.8}
+        elif gain is not None and gain >= 1.5:
             choice, status = "consider_alternative", "modeled_alternative_more_open"
             probs = {"target_was_reasonable": 0.25, "consider_alternative": 0.75}
         else:
@@ -169,6 +183,8 @@ def decisions(state: pd.DataFrame, predictions: pd.DataFrame, data_dir: Path) ->
                 "best_alternative_receiver_id": int(best.nfl_id) if best is not None else None,
                 "best_alternative_predicted_separation_yards": round(alt_sep, 2) if alt_sep is not None else None,
                 "alternative_separation_advantage_yards": round(gain, 2) if gain is not None else None,
+                "best_predicted_receiver_separation_yards": round(best_sep, 2),
+                "open_threshold_yards": OPEN_SEPARATION_YARDS,
                 "measurement": "predicted nearest-defender distance at the last tracked airborne frame"
             },
             "caveat": "Retrospective tracking-based heuristic, not a causal estimate of the best throw; ignores QB pressure, timing, throw difficulty, coverage assignments, and catch skill."
@@ -184,6 +200,62 @@ def decisions(state: pd.DataFrame, predictions: pd.DataFrame, data_dir: Path) ->
     return reports
 
 
+def running_play_reports(data_dir: Path) -> list[dict]:
+    """Use optional full-season nflverse play-by-play data to review rushing plays.
+
+    The Big Data Bowl supplementary table contains pass plays only. To include
+    rushing-play reviews, place nflverse's play_by_play_2023.csv under data/.
+    """
+    paths = list(data_dir.glob("**/play_by_play_2023.csv*"))
+    if not paths:
+        return []
+    pbp = pd.read_csv(paths[0], low_memory=False)
+    # Big Data Bowl game_id maps to nflverse old_game_id; support already-mapped CSVs too.
+    game_col = "old_game_id" if "old_game_id" in pbp.columns else "game_id"
+    if game_col not in pbp or "play_id" not in pbp:
+        raise ValueError("play_by_play_2023.csv needs old_game_id (or game_id) and play_id columns")
+    pbp["game_id"] = pd.to_numeric(pbp[game_col], errors="coerce")
+    pbp["play_id"] = pd.to_numeric(pbp.play_id, errors="coerce")
+    if "play_type" in pbp:
+        is_run = pbp.play_type.astype(str).str.lower().eq("run")
+    elif "rush_attempt" in pbp:
+        is_run = pbp.rush_attempt.astype(str).str.lower().isin(["true", "1"])
+    else:
+        raise ValueError("play-by-play CSV needs a play_type or rush_attempt field")
+    runs = pbp[is_run].copy()
+    if "yards_gained" not in runs:
+        raise ValueError("play-by-play CSV needs yards_gained to review run outcomes")
+    runs["yards_gained"] = pd.to_numeric(runs.yards_gained, errors="coerce")
+    down_col = "down" if "down" in runs else None
+    to_go_col = "ydstogo" if "ydstogo" in runs else ("yards_to_go" if "yards_to_go" in runs else None)
+    if down_col:
+        runs[down_col] = pd.to_numeric(runs[down_col], errors="coerce")
+    if to_go_col:
+        runs[to_go_col] = pd.to_numeric(runs[to_go_col], errors="coerce")
+    bad = runs.yards_gained.le(0)
+    if down_col and to_go_col:
+        bad |= runs[down_col].ge(3) & runs[to_go_col].notna() & runs.yards_gained.lt(runs[to_go_col])
+    if "fumble_lost" in runs:
+        bad |= runs.fumble_lost.astype(str).str.lower().isin(["true", "1"])
+    reports = []
+    for row in runs[bad & runs.game_id.notna() & runs.play_id.notna()].itertuples(index=False):
+        data = row._asdict()
+        game_id, play_id = int(data["game_id"]), int(data["play_id"])
+        detail = {"yards_gained": float(data["yards_gained"])}
+        if down_col and pd.notna(data.get(down_col)):
+            detail["down"] = int(data[down_col])
+        if to_go_col and pd.notna(data.get(to_go_col)):
+            detail["yards_to_go"] = float(data[to_go_col])
+        reports.append({
+            "game_id": game_id, "play_id": play_id,
+            "decision": "suggest_pass_next_time", "status": "unsuccessful_running_play",
+            "probabilities": {"run_again": 0.2, "pass_next_time": 0.8}, "confidence": "low",
+            "evidence": detail,
+            "caveat": "Rule-based post-play suggestion. A single failed run does not establish that passing would have been better."
+        })
+    return reports
+
+
 def main():
     parser = argparse.ArgumentParser(description="Train a small NFL tracking model and write typed per-play recommendations.")
     parser.add_argument("--data-dir", type=Path, default=Path("data"), help="Kaggle download root containing train/input_2023_wXX.csv")
@@ -193,7 +265,11 @@ def main():
     parser.add_argument("--output", type=Path, default=Path("reports/decisions.jsonl"))
     args = parser.parse_args()
     state, _, preds, mae, nrows, ngames = train(args.data_dir, args.weeks, args.max_games, Path("models"))
-    reports = decisions(state, preds, args.data_dir)
+    pass_reports = decisions(state, preds, args.data_dir)
+    run_reports = running_play_reports(args.data_dir)
+    if not list(args.data_dir.glob("**/play_by_play_2023.csv*")):
+        print("Note: Big Data Bowl files contain pass plays only. Add nflverse play_by_play_2023.csv to data/ to include run-play reviews.")
+    reports = pass_reports + run_reports
     selected_game = args.game_id if args.game_id is not None else min(state.game_id.unique())
     reports = [row for row in reports if row["game_id"] == selected_game]
     if not reports:

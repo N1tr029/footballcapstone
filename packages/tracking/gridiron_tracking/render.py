@@ -36,7 +36,7 @@ from . import ball as ballmod
 from . import field as fieldmod
 from . import verify as verifymod
 from .clips import RUN_DIR, ClipSpec
-from .contract import PlayTrack
+from .contract import Ball, PlayTrack
 from .detect import Detection
 from .pipeline import PipelineConfig, run as run_pipeline
 from .video import VideoSource
@@ -414,6 +414,47 @@ def _teams(spec: ClipSpec, track: PlayTrack, frames, rects, reg, fps: float,
     return sep
 
 
+def _merge_ball(track: PlayTrack, ball, log) -> None:
+    """Put the tracked ball on the frames, and say how much of it was seen.
+
+    It was previously computed and used only to badge the side-by-side video, so
+    track.json came out with no ball however well the ball had been tracked —
+    and everything downstream that needs one (possession, the passer, the throw,
+    the targeted receiver) had nothing to work with and no way to tell whether
+    that was because the ball was untracked or because the merge was missing.
+
+    Coasted samples are written as well as detected ones, because a ball between
+    two sightings really was somewhere between them. The contract's Ball has no
+    field for how a position was arrived at — unlike a player's o_source — so the
+    proportions go in meta, and a reader who does not check them is trusting a
+    5%-measured ball as though it were a 100%-measured one.
+    """
+    counts = ball.counts()
+    written = 0
+    for f in track.frames:
+        s = ball.at(f.t)
+        if s is None or s.source == "none":
+            continue
+        f.ball = Ball(x=float(s.x), y=float(s.y))
+        written += 1
+
+    measured = counts.get("detected", 0)
+    total = len(ball.samples) or 1
+    track.meta["ball"] = {
+        "frames_with_a_position": written,
+        "frames_total": len(track.frames),
+        "by_source": counts,
+        "measured_fraction": round(measured / total, 3),
+        "note": (
+            "A football in a wide broadcast shot is a few pixels and is behind "
+            "somebody most of the play. Read measured_fraction before trusting "
+            "any possession, passer or throw derived from this."
+        ),
+    }
+    log(f"    ball merged onto {written}/{len(track.frames)} frames "
+        f"({100 * measured / total:.0f}% actually seen)")
+
+
 def _ball(spec: ClipSpec, track: PlayTrack, frames, reg, fps, offset: int, log):
     """The ball, from the sports-ball class, gated to the field and to a player."""
     try:
@@ -643,12 +684,23 @@ def render(spec: ClipSpec, root: Path = RUN_DIR, force=(), log=print) -> RenderR
             log(f"    broadcast markers: {res.markers.measured:.2f} yd measured against "
                 f"{spec.distance_yards:.0f} stated "
                 f"({res.markers.error_yards:+.2f}, scatter {res.markers.straightness:.2f})")
+            # The two lines are read here to check the registration's scale, and
+            # they establish three more things nothing downstream can recover
+            # without the video again: the yardline, the distance, and — since the
+            # first-down line is always downfield — which way the offense is going.
+            # A clip cut near the snap with no ball has no other automatic answer
+            # to that last one, and every other inference depends on it.
+            out.track.meta["broadcast"] = res.markers.situation()
+            log(f"    situation: line of scrimmage x={res.markers.line_of_scrimmage:.1f}, "
+                f"offense attacks {res.markers.attacks}")
 
     if spec.track.ball:
         try:
             res.ball = _ball(spec, out.track, frames, src_reg, fps, offset, log)
         except Exception as e:  # noqa: BLE001 - a missing ball must not cost the video
             res.problems.append(f"ball tracking failed: {type(e).__name__}: {e}")
+        if res.ball is not None:
+            _merge_ball(out.track, res.ball, log)
 
     res.video = verifymod.side_by_side(
         out_dir / "sidebyside.mp4", out.track, timed, frames, rects, field_spec,

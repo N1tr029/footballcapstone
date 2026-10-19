@@ -33,17 +33,32 @@ pytest` at the root is **150 tests**, green.
 
 | stream | state |
 |---|---|
+| 1 — replay & visualization | [`packages/replay-engine/hindsight`](packages/replay-engine/hindsight) — Unity 6.6 app: field, 22 players, playback, play navigator, 115 real plays. Plus the original three.js [`prototype`](packages/replay-engine/prototype) |
 | 2 — footage → tracking | [`packages/tracking`](packages/tracking) — layer 2 built and validated against real tracking; layer 1's back half built and measured in yards. A real detector on real pixels is next |
-| 3 — play model | [`packages/counterfactual`](packages/counterfactual) — outcome forecast and typed decision review, merged with its history, bridged to the contract in all three directions |
-| 1 — replay & visualization | [`packages/replay-engine/prototype`](packages/replay-engine/prototype) — one play, scrubbable, hand-authored. Proves the data model animates |
-| 5 — app & product | [`apps/desktop`](apps/desktop) — **not merged.** The frontend is private and the seam it lands on is written down |
-| 4 — data platform | `packages/shared`, `apps/api` — not started. `PlayState` is still unwritten, and the contracts live in the packages that produce them until it is |
+| 3 — play model | [`packages/counterfactual`](packages/counterfactual) — outcome forecast and typed decision review, bridged to the contract in all three directions |
+| 4 — data platform | `packages/shared`, `apps/api` — **not started.** `PlayState` is unwritten, and the contracts live in the packages that produce them until it is |
+| 5 — app & product | [`apps/desktop`](apps/desktop) — **not started**, and possibly unnecessary: the Unity app may simply be the app |
 
-The join itself is real rather than co-location: a Big Data Bowl play becomes a
-`PlayTrack`, goes back through the feature builder into the frame of reference the
-model was fitted in, is scored by the committed regressors, and comes back as a
-simulated `PlayTrack` the renderer can draw — with provenance saying it never
-happened. That path is a test, and it runs against the real fitted model file.
+The join is data flow, not co-location. On a real play out of the Unity app:
+
+```
+hindsight play JSON ─▶ PlayTrack ─▶ layer 2 derives possession, blocks, tackles
+                                 ─▶ feature rows in the model's own frame
+                                 ─▶ the committed regressors
+                                 ─▶ simulated PlayTrack
+                                 ─▶ back to hindsight play JSON, labelled SIMULATED
+```
+
+Every arrow is a test, and they run against the real artefacts — Jeremy's 115
+committed plays and Landon's fitted `coordinate_model.joblib` — not against fixtures
+built to agree with them.
+
+The two conversions that can fail silently are both pinned by round-trip tests, and
+both were mutation-checked: drop the coordinate mirror and the feature round trip
+reports a 57-yard error; drop the angle reflection and five real plays fail. Neither
+is cosmetic — the Unity app's angles are compass bearings (0 = +y, clockwise) and the
+contract's are mathematical (0 = +x), so a careless rename rotates every player while
+the play still animates perfectly smoothly.
 
 **Not done, and worth saying plainly:** there is no win-probability model, so the
 headline "+0.11 win probability" below is an aspiration, not an output. The play
@@ -73,12 +88,12 @@ apps/
   desktop/          The app shell and UI
   api/              Service layer + the game pipeline
 packages/
-  shared/           Schemas shared between Python and TypeScript
+  shared/           Schemas shared between Python and TypeScript (empty; stream 4)
   tracking/         Data providers, player tracking, play-by-play store
   game-engine/      Field geometry, drive/series semantics, team tendencies
   play-detector/    Rules-based detection of decisive plays
   counterfactual/   Play-outcome model, defensive response models
-  replay-engine/    Field replay renderer
+  replay-engine/    Field replay renderer — hindsight/ (Unity) + prototype/ (three.js)
   ui/               Design system
 services/
   video-worker/     Clip cutting and export
@@ -138,11 +153,14 @@ Capstone project.
 | Abhi | [@chadiveabhi](https://github.com/chadiveabhi) | |
 | Connor | [@connorh27](https://github.com/connorh27) | |
 
-Merged in from where the work was done, histories intact:
-[`capstone-ML-model`](https://github.com/landonDuba/capstone-ML-model) →
-`packages/counterfactual`. Still outstanding:
-[`hindsight-frontend`](https://github.com/EllisJeremy/hindsight-frontend) →
-`apps/desktop` (see [apps/desktop/README.md](apps/desktop/README.md)).
+Merged in from where the work was done, every contributor's history intact:
+
+| from | to |
+|---|---|
+| [`landonDuba/capstone-ML-model`](https://github.com/landonDuba/capstone-ML-model) | `packages/counterfactual` |
+| [`EllisJeremy/hindsight-frontend`](https://github.com/EllisJeremy/hindsight-frontend) | `packages/replay-engine/hindsight` |
+
+Both by `git subtree`, so `git log` still shows who wrote what.
 
 ---
 

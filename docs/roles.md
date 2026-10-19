@@ -178,16 +178,21 @@ internals. If you need a new field, it goes in the contract and everyone gets it
 
 | Stream | Owner | Where the work is |
 |---|---|---|
-| 1 — Replay & visualization | | `packages/replay-engine` — prototype only |
+| 1 — Replay & visualization | Jeremy | `packages/replay-engine/hindsight` — Unity, as recommended above |
 | 2 — Footage → tracking data | Hassan | `packages/tracking` |
 | 3 — Play model | Landon | `packages/counterfactual` |
 | 4 — Data platform & pipeline | | not started |
-| 5 — App, integration & product | Jeremy | `apps/desktop` — frontend not merged yet |
+| 5 — App, integration & product | | not started |
 
-Two rows are still open. Stream 4 is the one roles.md warns about — "the one that
-quietly determines whether the other four ever meet" — and it is currently nobody's:
-`packages/shared` is empty, `PlayState` is unwritten, and the contracts live in the
-packages that produce them as a stopgap. Abhi and Connor are unassigned here.
+Two rows are still open, and one of them is the one this document warns about:
+stream 4, "the one that quietly determines whether the other four ever meet", is
+currently nobody's. `packages/shared` is empty, `PlayState` is unwritten, and the
+contracts live in the packages that produce them as a stopgap. Abhi and Connor are
+unassigned here.
+
+Stream 5 is open too, and may be smaller than it looks: the Unity app already has a
+play navigator and a playback HUD, so the first question is whether it *is* the app
+rather than something `apps/desktop` wraps.
 
 Streams 2 and 3 are the research risk; 4 is the one that quietly determines
 whether the other four ever meet. If someone has to carry two, the safe pairing

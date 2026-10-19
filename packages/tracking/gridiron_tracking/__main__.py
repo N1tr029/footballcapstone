@@ -99,7 +99,7 @@ def _unity(args) -> int:
     """
     import json
 
-    from . import hindsight
+    from . import hindsight, prepare
     from .contract import PlayTrack, validate
 
     names = available(args.spec_dir) if args.all else args.clip
@@ -131,6 +131,20 @@ def _unity(args) -> int:
             continue
 
         track = PlayTrack.from_json(json.loads(track_path.read_text()))
+
+        # Consolidate, side, orient and situate before showing it. The renderer
+        # survives 46 tracks — it draws 46 dots — but what it draws is then not a
+        # football team, and a play running toward -x looks entirely normal doing it.
+        if not args.raw:
+            track, prepared = prepare.prepare(track)
+            print(f"  {name:<18} {prepared.roster.before} tracks -> "
+                  f"{prepared.roster.after} players"
+                  + (", mirrored" if prepared.mirrored else "")
+                  + (f", {prepared.sides.offense} on offense"
+                     if prepared.sides and prepared.sides.confidence > 0 else ""))
+            for b in prepared.blockers:
+                print(f"      not reviewable: {b[:110]}")
+
         v = validate(track)
 
         # The app keys plays on (gameId, playId) and a vision track has neither, so
@@ -151,7 +165,7 @@ def _unity(args) -> int:
         path = hindsight.write_play(out, track)
         tracks.append(track)
         flag = "" if v.ok else f"  [contract: {'; '.join(v.problems)}]"
-        print(f"  {name:<18} {len(track.frames):>4} frames  {len(track.roster):>3} tracks"
+        print(f"  {' ':<18} {len(track.frames):>4} frames  {len(track.roster):>3} players"
               f"  -> {path.name}{flag}")
 
     if not tracks:
@@ -213,6 +227,9 @@ def main(argv=None) -> int:
     u.add_argument("--all", action="store_true")
     u.add_argument("--runs", type=Path, default=Path("data/runs"))
     u.add_argument("--unity-dir", type=Path, default=UNITY_PLAYS)
+    u.add_argument("--raw", action="store_true",
+                   help="export the tracker's output as-is, without consolidating "
+                        "the roster or orienting the field")
     u.add_argument("--replace", action="store_true",
                    help="index only these clips, dropping the app's own 115 real "
                         "plays from the navigator (the files stay on disk)")

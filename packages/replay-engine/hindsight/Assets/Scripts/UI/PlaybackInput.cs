@@ -13,12 +13,14 @@ namespace Hindsight.UI
     ///   1-4          speed 0.25x / 0.5x / 1x / 2x
     ///   R            restart
     ///   N or ]       next play       P or [   previous play
-    ///   C            toggle top-down / broadcast camera
+    ///   C            cycle top-down / broadcast / player view
+    ///   V            ride the next player        Shift+V   the previous one
     /// </summary>
     public class PlaybackInput : MonoBehaviour
     {
         public const string Help =
-            "Space play/pause   Left/Right step   1-4 speed   R restart   N/P next/prev play   C camera";
+            "Space play/pause   Left/Right step   1-4 speed   R restart   N/P next/prev play   "
+            + "C camera   V ride a player";
 
         PlaybackController playback;
         PlayLoader loader;
@@ -53,6 +55,29 @@ namespace Hindsight.UI
             }
 
             if (cameras != null && kb.cKey.wasPressedThisFrame) cameras.Toggle();
+
+            if (cameras != null && kb.vKey.wasPressedThisFrame)
+            {
+                bool back = kb.leftShiftKey.isPressed || kb.rightShiftKey.isPressed;
+                RidePlayer(back ? -1 : +1);
+            }
         }
+
+        /// <summary>Step the player view onto the next player, and switch to it.
+        ///
+        /// Holds an index rather than a reference because PlaybackController rebuilds its
+        /// view list on every play; the index is re-clamped against the current list each
+        /// time, so changing play while riding someone lands on a real player.</summary>
+        void RidePlayer(int step)
+        {
+            var players = playback?.Players;
+            if (players == null || players.Count == 0) return;
+
+            riding = ((riding + step) % players.Count + players.Count) % players.Count;
+            cameras.SetPovTarget(players[riding].transform);
+            cameras.SetView(CameraRig.View.PlayerPov);
+        }
+
+        int riding = -1;
     }
 }

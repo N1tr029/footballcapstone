@@ -54,6 +54,23 @@ namespace Hindsight
             await loader.InitializeAsync();
         }
 
+        /// <summary>Whose view to offer first: the quarterback, else the first player.
+        ///
+        /// Position is the only hint in the play file that survives for a vision track as
+        /// well as a release one, and on a vision track there is none — so this falls back
+        /// rather than insisting.</summary>
+        Transform PickPovTarget(PlayData play)
+        {
+            var players = playback.Players;
+            if (players == null || players.Count == 0) return null;
+
+            foreach (var view in players)
+            {
+                if (view.Info != null && view.Info.position == "QB") return view.transform;
+            }
+            return players[0].transform;
+        }
+
         void OnDestroy()
         {
             if (loader != null) loader.PlayLoaded -= OnPlayLoaded;
@@ -64,6 +81,11 @@ namespace Hindsight
             playback.SetPlay(play);
             field.SetMarkers(play.lineOfScrimmage, play.firstDownLine);
             cameras.SetTarget(playback.Ball.transform);
+
+            // Pre-select whose helmet V rides, so the player view is one keypress away
+            // rather than needing a player chosen first. The passer is the useful default
+            // on a pass: he is the man whose decision the review is about.
+            cameras.SetPovTarget(PickPovTarget(play));
         }
     }
 }

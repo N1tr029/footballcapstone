@@ -18,7 +18,7 @@ Assets/Scripts/
   Data/      PlayData (JSON DTOs), IPlaySource, WebPlaySource (UnityWebRequest), PlayLoader
   Playback/  PlaybackController, PlayTimeline (sampling), ThrowArc, PlayerView, BallView, TeamColors
   Field/     FieldBuilder (field mesh, lines, hashes, TMP yard numbers, LOS / first down markers)
-  Cameras/   CameraRig (ortho top-down + perspective broadcast)
+  Cameras/   CameraRig (ortho top-down + perspective broadcast + first-person player)
   UI/        PlaybackInput (keyboard), PlaybackHud (TMP overlay), PlayNavigator + NavCell
              (quarter > drive > play accordion bar), Billboard
   Editor/    HindsightSetup (menu: generates materials, prefabs, scene object)
@@ -37,7 +37,18 @@ Assets/Prefabs/                Player.prefab, Ball.prefab (generated, safe to cu
 4. Press Play.
 
 Controls: Space play/pause, Left/Right step a frame, 1-4 speed (0.25/0.5/1/2x), R restart,
-N/] next play, P/[ previous play, C toggle camera.
+N/] next play, P/[ previous play, C cycle camera, V ride the next player (Shift+V previous).
+
+Cameras cycle top-down > broadcast > player view. The player view rides one man's helmet
+and is pre-pointed at the quarterback when a play loads, so V is one keypress rather than
+needing someone selected first.
+
+**The player view looks along the body, not the eyes.** No public football dataset has a
+gaze column and there will not be one, so the camera uses `o`, the measured body
+orientation. A receiver running a corner with his head turned back at the ball is drawn
+facing the corner. It is an honest view of where a player was and what was around him; it
+is not what he saw. On a play whose `oSource` is not `measured` — anything from the vision
+pipeline, and every simulated play — it is an inference drawn on top of an inference.
 
 Play navigator (bottom bar, fixed width): quarters > drives > plays. Only the quarter and drive
 containing the current play are open; opening one takes width from its collapsed siblings.
@@ -162,3 +173,32 @@ Notes for producers (exporter or backend):
   (from `huddle_break_offense`), so playback starts 1.5 s before the snap by default.
 - `plays.absoluteYardlineNumber` is in raw (unflipped) tracking x, within ~0.5 yd of the ball at the snap.
 - Only `tracking_week_1.csv` is currently in `Data/raw/`.
+
+## Plays written from the Python side
+
+`Assets/StreamingAssets/plays/` is no longer only this project's exporter's output. Two
+commands in the monorepo write here, and both go through
+`packages/tracking/gridiron_tracking/hindsight.py`, which converts the shared `PlayTrack`
+contract into this schema:
+
+```bash
+python -m gridiron_tracking unity <clip>          # a clip tracked from video
+python -m gridiron_counterfactual whatif --worst 5 # plays + the model's alternative
+```
+
+Both keep this project's own 115 plays and re-index around them. Plays from video carry
+`gameId` 999000001; simulated plays sit immediately after the play they argue with, in the
+same quarter and drive.
+
+Those writers send three fields that are **not** in schemaVersion 1. `JsonUtility` ignores
+undeclared fields so they are inert today, and they are what the client needs to stop
+drawing a forecast as though it were a measurement:
+
+- `simulated` (top level) — true when the play did not happen.
+- `provenance` (top level) — where the coordinates came from, and what was assumed.
+- `oSource` (per player per frame) — `measured`, `from_dir`, `from_velocity`, `assumed`, or
+  `authored`.
+
+Declaring and reading them is the open task on this side. A simulated play currently looks
+exactly like a real one in the viewer, and the description is the only thing saying
+otherwise.

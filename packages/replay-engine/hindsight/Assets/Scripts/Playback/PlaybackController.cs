@@ -30,6 +30,9 @@ namespace Hindsight.Playback
         /// <summary>Current fractional frame index into the timeline.</summary>
         public float CurrentFrame => Timeline == null ? 0f : elapsed * Timeline.FrameRate;
         public BallView Ball => ball;
+        /// <summary>The spawned player views, in the play's roster order. Read-only:
+        /// the list is rebuilt on every SetPlay, so hold an index, not a reference.</summary>
+        public IReadOnlyList<PlayerView> Players => views;
 
         public event Action<PlayTimeline> PlayChanged;
 

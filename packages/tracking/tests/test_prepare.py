@@ -118,14 +118,47 @@ def test_a_clip_with_everything_is_reviewable():
         out.meta["lineOfScrimmage"] + 6, abs=0.01)
 
 
-def test_a_clip_with_no_broadcast_read_says_the_direction_is_unknown():
-    track = clip(with_ball=True)
+def test_a_coach_upload_gets_its_line_from_the_formation():
+    """No virtual lines and no graphic — three of the project's clips are this.
+
+    The line then comes off the two front ranks at the snap, and the report says
+    which of the two sources it used, because one is a surveyed line drawn by a
+    broadcaster and the other is an estimate from where people were standing.
+    """
+    track = clip(with_ball=True, attacks="right", los=47.0)
     del track.meta["broadcast"]
     out, report = prepare.prepare(track)
 
-    assert not report.reviewable
-    assert any("which way the offense attacks is unknown" in b for b in report.blockers)
-    assert any("distance_yards" in b for b in report.blockers)
+    assert report.line_source == "formation"
+    assert report.line_of_scrimmage == pytest.approx(47.0, abs=2.0)
+    assert out.meta["formation_line"]["attacks"] == "right"
+    assert report.reviewable, report.blockers
+    # The distance is genuinely unavailable without a graphic, and that is a note
+    # rather than a blocker: the review only uses the down to choose between
+    # recommending a run and recommending a punt.
+    assert any("no distance to go" in n for n in report.notes)
+    assert not any("distance" in b for b in report.blockers)
+
+
+def test_the_broadcast_line_is_preferred_over_the_formation():
+    track = clip(with_ball=True, attacks="right", los=47.0)
+    out, report = prepare.prepare(track)
+    assert report.line_source == "broadcast"
+    assert "formation_line" not in out.meta
+
+
+def test_a_frame_that_is_not_a_snap_is_called_out():
+    """A clip cut after the ball is gone has both teams mixed together."""
+    track = clip(with_ball=True, attacks="right", los=47.0)
+    del track.meta["broadcast"]
+    for f in track.frames:                       # shove the defense miles downfield
+        for pid, p in f.players.items():
+            if pid.startswith("d"):
+                p.x += 25.0
+
+    out, report = prepare.prepare(track)
+    assert report.line_source is None
+    assert any("not a snap" in b for b in report.blockers)
 
 
 def test_the_report_survives_a_round_trip_through_meta():

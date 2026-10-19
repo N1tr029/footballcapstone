@@ -32,6 +32,8 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
+import numpy as np
+
 from .contract import PlayTrack
 
 # Nobody is this close to the ball at the snap except the man snapping it.
@@ -156,3 +158,72 @@ def _snap_frame(track: PlayTrack):
             return f
     # No snap event: the frame nearest t = 0, which is what the contract says t = 0 is.
     return min(track.frames, key=lambda f: abs(f.t)) if track.frames else None
+
+
+# ------------------------------------------------- the line, without a broadcast
+
+
+@dataclass
+class FormationLine:
+    """Where the two teams met, and which way the offense was pointed."""
+
+    los: float
+    attacks: str          # 'left' | 'right'
+    gap: float            # yards between the two front ranks
+    confidence: float
+
+    def to_json(self) -> dict:
+        return {"lineOfScrimmage": round(self.los, 2), "attacks": self.attacks,
+                "gap_yards": round(self.gap, 2), "confidence": self.confidence,
+                "source": "the formation at the snap, not a drawn line"}
+
+
+def formation_line(track: PlayTrack, offense: str) -> FormationLine | None:
+    """The line of scrimmage read off the two front ranks at the snap.
+
+    ``broadcast.MarkerCheck`` is the better answer and needs a televised game: the
+    broadcaster draws the line through a surveyed field and states the distance in
+    writing. A coach's upload has no graphics at all — no virtual line, no
+    down-and-distance — and three of this project's clips are exactly that case.
+
+    What it does have is twenty-two people lined up facing each other. The offense's
+    front rank and the defense's front rank are a yard apart across the ball, so the
+    line is between them and the offense attacks away from its own side. Percentiles
+    rather than extremes, because a split receiver stands on the line and a deep
+    safety stands fifteen yards off it, and either would drag a min or a max.
+
+    Returns None when the two ranks are not separated, which means the frame is not
+    a snap — a clip cut after the ball is gone has both teams mixed together, and
+    there is no line to find.
+    """
+    snap = _snap_frame(track)
+    if snap is None:
+        return None
+
+    off = [p.x for pid, p in snap.players.items()
+           if (e := track.roster.get(pid)) and e.team == offense]
+    deff = [p.x for pid, p in snap.players.items()
+            if (e := track.roster.get(pid)) and e.team not in (offense, None)]
+    if len(off) < 4 or len(deff) < 4:
+        return None
+
+    off_a, deff_a = np.asarray(off, float), np.asarray(deff, float)
+    attacks = "right" if float(np.median(deff_a)) > float(np.median(off_a)) else "left"
+
+    if attacks == "right":
+        front_off = float(np.percentile(off_a, 90))   # the linemen, furthest downfield
+        front_def = float(np.percentile(deff_a, 10))  # the d-line, closest to them
+    else:
+        front_off = float(np.percentile(off_a, 10))
+        front_def = float(np.percentile(deff_a, 90))
+
+    gap = abs(front_def - front_off)
+    los = (front_off + front_def) / 2.0
+
+    # A snap has the two ranks within a couple of yards of each other across the
+    # ball. Much more and this is not a snap; much less and they are interleaved,
+    # which means the play has already started.
+    if gap > 8.0 or (attacks == "right" and front_def < front_off) \
+            or (attacks == "left" and front_def > front_off):
+        return FormationLine(los, attacks, gap, 0.3)
+    return FormationLine(los, attacks, gap, 0.8 if gap <= 4.0 else 0.6)

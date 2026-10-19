@@ -184,6 +184,18 @@ class TrackSpec:
     sideline_band: float = 2.0
 
     ball: bool = True
+    ball_tiles: int = 3
+    """Crops per side for ball detection, as ``detect.tiles`` is for players.
+
+    A football in a broadcast wide shot is a handful of pixels, and after the
+    letterboxing ``imgsz`` does it is fewer. The same argument that makes tiling
+    work for a far-hash player applies to the ball several times over, so this
+    defaults high where the player tiling defaults to 1."""
+    ball_conf: float = 0.05
+    """Detection floor for the ball. Lower than the players': a missed ball costs
+    the throw instant and there is a tracker downstream whose whole job is to throw
+    out the ones that do not move like a ball."""
+    ball_imgsz: int = 1536
 
 
 @dataclass

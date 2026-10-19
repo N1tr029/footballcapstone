@@ -49,12 +49,17 @@ class PrepareReport:
     sides: sidesmod.Sides | None = None
     mirrored: bool = False
     line_of_scrimmage: float | None = None
+    line_source: str | None = None
+    """``broadcast`` (the drawn lines) or ``formation`` (where the teams lined up).
+    The first is a surveyed line; the second is an estimate from the players."""
     has_ball: bool = False
     ball_measured: float = 0.0
     """Fraction of ball samples that were actually detected rather than coasted."""
     ball_coverage: float = 0.0
     reviewable: bool = False
     blockers: list[str] = dc_field(default_factory=list)
+    notes: list[str] = dc_field(default_factory=list)
+    """Things worth knowing that do not stop the review."""
 
     def table(self) -> str:
         lines = [self.roster.table(), ""]
@@ -64,7 +69,8 @@ class PrepareReport:
                 f"({self.sides.method}, confidence {self.sides.confidence})"
             )
         if self.line_of_scrimmage is not None:
-            lines.append(f"  line of scrimmage x = {self.line_of_scrimmage:.1f} yd")
+            lines.append(f"  line of scrimmage x = {self.line_of_scrimmage:.1f} yd"
+                         f"   (from the {self.line_source})")
         lines.append(f"  orientation       {'mirrored so the offense attacks +x' if self.mirrored else 'already attacking +x'}")
         lines.append(
             f"  ball track        " + (
@@ -77,6 +83,8 @@ class PrepareReport:
         lines.append(f"  reviewable        {'yes' if self.reviewable else 'NO'}")
         for b in self.blockers:
             lines.append(f"    - {b}")
+        for n in self.notes:
+            lines.append(f"  note: {n}")
         return "\n".join(lines)
 
     def to_json(self) -> dict[str, Any]:
@@ -85,11 +93,13 @@ class PrepareReport:
             "sides": self.sides.to_json() if self.sides else None,
             "mirrored": self.mirrored,
             "line_of_scrimmage": self.line_of_scrimmage,
+            "line_source": self.line_source,
             "has_ball": self.has_ball,
             "ball_measured": round(self.ball_measured, 3),
             "ball_coverage": round(self.ball_coverage, 3),
             "reviewable": self.reviewable,
             "blockers": list(self.blockers),
+            "notes": list(self.notes),
         }
 
 
@@ -113,6 +123,26 @@ def prepare(track: PlayTrack, offense: str | None = None) -> tuple[PlayTrack, Pr
 
     # --- who has the ball ----------------------------------------------------
     report.sides = sidesmod.infer_sides(out, offense=offense, los_x=los, attacks=attacks)
+
+    # --- and if there was no broadcast to read ---------------------------------
+    # A coach's upload has no virtual lines and no down-and-distance, so the line
+    # has to come off the formation instead. It needs the offense named first, which
+    # is why it runs after infer_sides rather than feeding it: pre-snap stillness
+    # does not need a line, and the line does need a side.
+    if los is None and report.sides.confidence > 0.0:
+        formation = sidesmod.formation_line(out, report.sides.offense)
+        if formation is not None and formation.confidence >= 0.5:
+            los, attacks = formation.los, formation.attacks
+            report.line_source = "formation"
+            out.meta["formation_line"] = formation.to_json()
+        elif formation is not None:
+            report.blockers.append(
+                f"the two front ranks are {formation.gap:.1f} yards apart at the "
+                f"frame marked as the snap, which is not a snap. Check snap_frame "
+                f"in the clip spec — if it equals start, nothing has identified one."
+            )
+    elif los is not None:
+        report.line_source = "broadcast"
     if report.sides.confidence <= 0.0:
         report.blockers.append(
             "which side has the ball could not be established. With no ball track "
@@ -153,9 +183,11 @@ def prepare(track: PlayTrack, offense: str | None = None) -> tuple[PlayTrack, Pr
         if los is not None:
             out.meta["firstDownLine"] = round(min(los + situation["yardsToGo"], 110.0), 2)
     else:
-        report.blockers.append(
-            "no distance to go; set distance_yards in the clip spec from the "
-            "down-and-distance graphic"
+        report.notes.append(
+            "no distance to go: this clip has no down-and-distance graphic to read "
+            "it from. Set distance_yards in the spec if you know it. The review does "
+            "not need it — decision_engine only uses the down to choose between "
+            "recommending a run and recommending a punt."
         )
 
     # --- the ball -------------------------------------------------------------

@@ -414,6 +414,46 @@ def _teams(spec: ClipSpec, track: PlayTrack, frames, rects, reg, fps: float,
     return sep
 
 
+def _ball_boxes(model, image, spec: ClipSpec):
+    """Every sports-ball box in one frame, over overlapping crops.
+
+    The same trick ``detect.yolo._tiled`` uses for far-hash players, and for the
+    same reason one step further: a football is the smallest thing on the field.
+    Un-tiled on the reference clip the generic class finds it on 3 frames of 65.
+
+    No merging of duplicates across overlaps, deliberately — the ball tracker
+    downstream takes a list of candidates per frame and picks the one that moves
+    like a ball, so a few extra candidates cost it nothing and a missed one costs
+    the throw instant.
+    """
+    n = max(1, int(spec.track.ball_tiles))
+    kw = dict(conf=spec.track.ball_conf, imgsz=spec.track.ball_imgsz,
+              classes=[32], verbose=False)
+    h, w = image.shape[:2]
+    out = []
+
+    def run(crop, dx, dy):
+        res = model.predict(crop, **kw)[0]
+        if res.boxes is None or not len(res.boxes):
+            return
+        for (x1, y1, x2, y2), c in zip(res.boxes.xyxy.cpu().numpy(),
+                                       res.boxes.conf.cpu().numpy()):
+            out.append(((float(x1) + dx, float(y1) + dy,
+                         float(x2) + dx, float(y2) + dy), float(c)))
+
+    run(image, 0.0, 0.0)
+    if n > 1:
+        tw, th = w / n, h / n
+        ox, oy = tw * spec.detect.tile_overlap, th * spec.detect.tile_overlap
+        for r in range(n):
+            for c in range(n):
+                x0, y0 = int(max(0, c * tw - ox)), int(max(0, r * th - oy))
+                x1, y1 = int(min(w, (c + 1) * tw + ox)), int(min(h, (r + 1) * th + oy))
+                if x1 - x0 >= 32 and y1 - y0 >= 32:
+                    run(image[y0:y1, x0:x1], x0, y0)
+    return out
+
+
 def _merge_ball(track: PlayTrack, ball, log) -> None:
     """Put the tracked ball on the frames, and say how much of it was seen.
 
@@ -464,6 +504,7 @@ def _ball(spec: ClipSpec, track: PlayTrack, frames, reg, fps, offset: int, log):
     model = YOLO(spec.detect.weights)
     cand: dict[float, list] = {}
     players: dict[float, np.ndarray] = {}
+    seen = 0
     for f in track.frames:
         src = int(round(f.t * fps)) + offset
         img = frames.get(src)
@@ -471,14 +512,17 @@ def _ball(spec: ClipSpec, track: PlayTrack, frames, reg, fps, offset: int, log):
         players[key] = np.array([[p.x, p.y] for p in f.players.values()]) if f.players else np.zeros((0, 2))
         if img is None:
             continue
-        res = model.predict(img, conf=0.10, imgsz=spec.detect.imgsz, classes=[32], verbose=False)[0]
+        boxes = _ball_boxes(model, img, spec)
+        seen += bool(boxes)
         got = []
-        if res.boxes is not None and len(res.boxes):
-            for (x1, y1, x2, y2), c in zip(res.boxes.xyxy.cpu().numpy(), res.boxes.conf.cpu().numpy()):
-                pt = np.atleast_2d(reg.to_field(src, [[(x1 + x2) / 2, (y1 + y2) / 2]], height_yards=1.0))[0]
-                if np.isfinite(pt).all():
-                    got.append((float(pt[0]), float(pt[1]), float(c)))
+        for (x1, y1, x2, y2), c in boxes:
+            pt = np.atleast_2d(reg.to_field(src, [[(x1 + x2) / 2, (y1 + y2) / 2]], height_yards=1.0))[0]
+            if np.isfinite(pt).all():
+                got.append((float(pt[0]), float(pt[1]), float(c)))
         cand[key] = got
+    log(f"    ball candidates on {seen}/{len(track.frames)} frames "
+        f"({spec.track.ball_tiles}x{spec.track.ball_tiles} tiles, "
+        f"conf {spec.track.ball_conf}, imgsz {spec.track.ball_imgsz})")
     bt = ballmod.track_ball([round(f.t, 3) for f in track.frames], cand, players_by_t=players)
     log(f"    {bt.summary()}")
     return bt

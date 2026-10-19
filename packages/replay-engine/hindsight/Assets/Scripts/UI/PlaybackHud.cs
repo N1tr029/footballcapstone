@@ -23,6 +23,7 @@ namespace Hindsight.UI
         PlayLoader loader;
         TextMeshProUGUI header;
         TextMeshProUGUI status;
+        TextMeshProUGUI simulatedBadge;
         string loadError;
         string hoverText;
 
@@ -51,6 +52,35 @@ namespace Hindsight.UI
                 $"{matchup}   Q{p.quarter} {p.gameClock}   {Ordinal(p.down)} & {p.yardsToGo}   " +
                 $"<size=80%>drive {p.driveNumber}, play {loader.CurrentIndex + 1}/{loader.Plays.Count}</size>\n" +
                 $"<size=80%>{p.description}</size>";
+
+            // A simulated play must never draw like a measured one. The description
+            // says so too, but a description is read once and a badge is on every
+            // frame — which is the standard docs/roles.md sets: "The simulation is
+            // never presented as fact. Every simulated frame is labelled."
+            ShowSimulated(p.simulated || AnyOrientationInferred(p));
+        }
+
+        static bool AnyOrientationInferred(PlayData play)
+        {
+            // Not only fully simulated plays: a track from video has every body angle
+            // inferred from its own velocity, and a viewer reading a player's facing
+            // off the screen deserves to know that nothing measured it.
+            if (play.frames == null) return false;
+            foreach (var frame in play.frames)
+            {
+                if (frame.players == null) continue;
+                foreach (var p in frame.players)
+                {
+                    if (!p.OrientationMeasured) return true;
+                }
+            }
+            return false;
+        }
+
+        void ShowSimulated(bool on)
+        {
+            if (simulatedBadge == null) return;
+            simulatedBadge.gameObject.SetActive(on);
         }
 
         void Update()
@@ -103,10 +133,49 @@ namespace Hindsight.UI
             navRect.sizeDelta = new Vector2(-2f * Margin, navigatorHeight);
             navRect.gameObject.AddComponent<PlayNavigator>().Init(loader, text => hoverText = text);
 
+            simulatedBadge = BuildSimulatedBadge(canvas.transform);
+            simulatedBadge.gameObject.SetActive(false);
+
             // Clicks need an EventSystem; the Input System module picks up its default UI actions.
             if (EventSystem.current == null && FindAnyObjectByType<EventSystem>() == null)
                 new GameObject("EventSystem", typeof(EventSystem), typeof(InputSystemUIInputModule))
                     .transform.SetParent(transform, false);
+        }
+
+        TextMeshProUGUI BuildSimulatedBadge(Transform parent)
+        {
+            // Top-centre, on its own, in a colour nothing else on the HUD uses. It is
+            // deliberately not subtle: this is the one thing in the viewer that
+            // separates a record of what happened from a model's guess about what
+            // might have.
+            var go = new GameObject("SimulatedBadge", typeof(RectTransform));
+            go.transform.SetParent(parent, false);
+            var rt = (RectTransform)go.transform;
+            rt.anchorMin = new Vector2(0.5f, 1f);
+            rt.anchorMax = new Vector2(0.5f, 1f);
+            rt.pivot = new Vector2(0.5f, 1f);
+            rt.anchoredPosition = new Vector2(0f, -Margin);
+            rt.sizeDelta = new Vector2(760f, 64f);
+
+            var background = go.AddComponent<Image>();
+            background.color = new Color(0.72f, 0.12f, 0.12f, 0.88f);
+            background.raycastTarget = false;
+
+            var labelGo = new GameObject("Label", typeof(RectTransform));
+            labelGo.transform.SetParent(go.transform, false);
+            var labelRt = (RectTransform)labelGo.transform;
+            labelRt.anchorMin = Vector2.zero;
+            labelRt.anchorMax = Vector2.one;
+            labelRt.sizeDelta = Vector2.zero;
+
+            var label = labelGo.AddComponent<TextMeshProUGUI>();
+            label.text = "SIMULATED — THIS DID NOT HAPPEN";
+            label.fontSize = fontSize * 1.1f;
+            label.fontStyle = FontStyles.Bold;
+            label.color = Color.white;
+            label.alignment = TextAlignmentOptions.Center;
+            label.raycastTarget = false;
+            return label;
         }
 
         TextMeshProUGUI CreateText(Transform parent, string objectName, bool top)

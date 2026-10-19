@@ -19,7 +19,7 @@ Assets/Scripts/
   Playback/  PlaybackController, PlayTimeline (sampling), ThrowArc, PlayerView, BallView, TeamColors
   Field/     FieldBuilder (field mesh, lines, hashes, TMP yard numbers, LOS / first down markers)
   Cameras/   CameraRig (ortho top-down + perspective broadcast + first-person player)
-  UI/        PlaybackInput (keyboard), PlaybackHud (TMP overlay), PlayNavigator + NavCell
+  UI/        PlaybackInput (keyboard), PlaybackHud (TMP overlay + SIMULATED badge), PlayNavigator + NavCell
              (quarter > drive > play accordion bar), Billboard
   Editor/    HindsightSetup (menu: generates materials, prefabs, scene object)
 Assets/Art/Materials/          Unlit.mat, Ball.mat (generated)
@@ -199,6 +199,14 @@ drawing a forecast as though it were a measurement:
 - `oSource` (per player per frame) — `measured`, `from_dir`, `from_velocity`, `assumed`, or
   `authored`.
 
-Declaring and reading them is the open task on this side. A simulated play currently looks
-exactly like a real one in the viewer, and the description is the only thing saying
-otherwise.
+All three are now declared in `PlayData.cs` and read. A play whose `simulated` flag is set
+— or any of whose players carry an `oSource` that is not `measured` — shows a red
+**SIMULATED — THIS DID NOT HAPPEN** badge at the top of the screen for every frame it is
+on. `JsonUtility` defaults a missing `simulated` to false and a missing `oSource` to the
+empty string, which `PlayerState.OrientationMeasured` treats as measured: correct, because
+the only files without those fields are this project's own exporter's, and those are
+measured tracking.
+
+The badge fires on inferred orientation as well as on a full simulation on purpose. A
+track from video has every body angle derived from its own velocity, and a viewer reading
+a player's facing off the screen deserves to know that nothing measured it.

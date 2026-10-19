@@ -33,6 +33,12 @@ namespace Hindsight.Data
         /// <summary>Tracking samples per second (10 for NGS data).</summary>
         public int frameRate;
         public int snapFrameId;
+        /// <summary>True when this play did not happen: the positions are a model's
+        /// forecast, not an observation. Written by the Python side
+        /// (gridiron_tracking.hindsight); absent from files this project's own
+        /// exporter wrote, where JsonUtility leaves it false — which is correct,
+        /// since those are measured tracking.</summary>
+        public bool simulated;
         public PlayerInfo[] players;
         public FrameData[] frames;
     }
@@ -47,6 +53,9 @@ namespace Hindsight.Data
         public string position;
         /// <summary>"offense" or "defense".</summary>
         public string side;
+        /// <summary>The track this player came from, when the play was built by the
+        /// vision pipeline and the nflId is a synthetic one. Empty otherwise.</summary>
+        public string trackId;
     }
 
     [Serializable]
@@ -73,6 +82,17 @@ namespace Hindsight.Data
         public float dir;
         /// <summary>Speed in yards/second.</summary>
         public float s;
+        /// <summary>How this player's orientation was arrived at: measured, from_dir,
+        /// from_velocity, assumed, or authored. Empty on files written before the
+        /// field existed, which are all measured tracking.
+        ///
+        /// It matters because good animation implies good data to a viewer. A body
+        /// angle inferred from a forecast velocity draws exactly as smoothly as one
+        /// the league's tracking system measured, and only this says which it is.</summary>
+        public string oSource;
+
+        public bool OrientationMeasured =>
+            string.IsNullOrEmpty(oSource) || oSource == "measured";
     }
 
     [Serializable]

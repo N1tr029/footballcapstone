@@ -20,8 +20,8 @@ def play(ball_path, player_paths=None, measured=0.6, n=20):
     """``ball_path`` is a list of (x, y) or None, one per frame."""
     players = player_paths or {
         "qb": [(40.0, 26.0)] * n,
-        "wr": [(40.0 + i * 1.2, 34.0) for i in range(n)],
-        "cb": [(42.0 + i * 1.2, 36.0) for i in range(n)],
+        "wr": [(40.0 + i * 0.9, 34.0) for i in range(n)],   # 9 yd/s, humanly
+        "cb": [(42.0 + i * 0.9, 36.0) for i in range(n)],
     }
     roster = {pid: RosterEntry(id=pid, team="teamA" if pid != "cb" else "teamB")
               for pid in players}
@@ -51,7 +51,7 @@ def a_pass(n=20, throw_at=5, land_at=13):
             f = (i - throw_at) / (land_at - throw_at)
             path.append((40.0 + f * 16.0, 26.0 + f * 8.0))  # in the air
         else:
-            path.append((40.0 + i * 1.2 - 2.4, 34.0))       # with the receiver
+            path.append((40.0 + i * 0.9 - 1.8, 34.0))       # with the receiver
     return path
 
 
@@ -61,7 +61,7 @@ def test_a_thrown_ball_gives_a_throw_and_an_arrival():
 
     assert found.found
     assert found.thrown_at == pytest.approx(0.5, abs=0.11)
-    assert found.arrived_at == pytest.approx(1.3, abs=0.21)
+    assert found.arrived_at == pytest.approx(1.3, abs=0.11)
     assert found.flight_yards > events.MIN_FLIGHT_DISTANCE
     assert found.confidence > 0.5
 
@@ -97,7 +97,9 @@ def test_a_handoff_is_not_a_throw():
     })
     found = events.apply(track)
     assert not found.found
-    assert any("handoff or a pitch" in n for n in found.notes)
+    # Either diagnosis is correct for a handoff: too slow to be a throw at all, or
+    # fast enough to notice and far too short to be one.
+    assert any("never exceeded" in n or "handoff or a pitch" in n for n in found.notes)
 
 
 def test_a_mostly_coasted_ball_is_refused():

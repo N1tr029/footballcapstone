@@ -454,6 +454,60 @@ def _ball_boxes(model, image, spec: ClipSpec):
     return out
 
 
+def _drop_static_candidates(cand: dict, log, radius: float = 1.5,
+                            min_frames: int = 8) -> dict:
+    """Throw away ball candidates that sit in one place all play.
+
+    The generic sports-ball class has an easy wrong answer on a televised game: the
+    down-and-distance graphic is rendered onto the field near the line of scrimmage,
+    it is about the right shape, and it is in every frame. Tiling the detector made
+    it nine times better at finding it — 3 candidates became 27, and the resulting
+    "ball" travelled 2.4 yards in 2.6 seconds.
+
+    A football is the one object on the field guaranteed to move. So a cluster of
+    candidates that appears at the same field position across a large part of the
+    play is furniture, whatever the detector's confidence, and dropping it lets the
+    tracker consider whatever else was found. This is a filter on persistence and
+    not on appearance: it has no opinion about what the thing is, only that a ball
+    does not spend a play standing still.
+    """
+    points = [(t, x, y) for t, got in cand.items() for (x, y, _c) in got]
+    if len(points) < min_frames:
+        return cand
+
+    static: list[tuple[float, float]] = []
+    used = [False] * len(points)
+    for i, (_t, x, y) in enumerate(points):
+        if used[i]:
+            continue
+        members = [j for j, (_tj, xj, yj) in enumerate(points)
+                   if not used[j] and np.hypot(xj - x, yj - y) <= radius]
+        frames_seen = {points[j][0] for j in members}
+        if len(frames_seen) >= min_frames:
+            for j in members:
+                used[j] = True
+            cx = float(np.mean([points[j][1] for j in members]))
+            cy = float(np.mean([points[j][2] for j in members]))
+            static.append((cx, cy))
+
+    if not static:
+        return cand
+
+    out, dropped = {}, 0
+    for t, got in cand.items():
+        keep = []
+        for (x, y, c) in got:
+            if any(np.hypot(x - sx, y - sy) <= radius for sx, sy in static):
+                dropped += 1
+            else:
+                keep.append((x, y, c))
+        out[t] = keep
+    log(f"    dropped {dropped} static ball candidates at "
+        + ", ".join(f"({sx:.0f}, {sy:.0f})" for sx, sy in static[:3])
+        + " — a ball does not stand still")
+    return out
+
+
 MIN_BALL_TRAVEL = 10.0
 """Yards a real ball covers in a play, at the very least. Below this the track is
 of something that does not move, which on a televised game means a graphic."""
@@ -545,6 +599,7 @@ def _ball(spec: ClipSpec, track: PlayTrack, frames, reg, fps, offset: int, log):
     log(f"    ball candidates on {seen}/{len(track.frames)} frames "
         f"({spec.track.ball_tiles}x{spec.track.ball_tiles} tiles, "
         f"conf {spec.track.ball_conf}, imgsz {spec.track.ball_imgsz})")
+    cand = _drop_static_candidates(cand, log)
     bt = ballmod.track_ball([round(f.t, 3) for f in track.frames], cand, players_by_t=players)
     log(f"    {bt.summary()}")
     return bt

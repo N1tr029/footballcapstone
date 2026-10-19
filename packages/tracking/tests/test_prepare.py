@@ -34,9 +34,23 @@ def clip(attacks="left", los=47.0, with_ball=False, n_frames=12, extra_kit=False
                              o_source="from_velocity")
             for pid, (x, y) in base.items()
         }
+        # A ball that is held, then thrown across the field, then caught — so the
+        # pass-window derivation has something to find. A stationary ball is a run,
+        # and prepare is right to say so.
+        ball = None
+        if with_ball:
+            if i <= 5:
+                bx, by = los - sign * 5.0, 26.0
+            elif i < 9:
+                f = (i - 5) / 4.0
+                bx = los - sign * 5.0 + sign * f * 22.0
+                by = 26.0 + f * 12.0
+            else:
+                bx, by = los + sign * 17.0, 38.0
+            ball = Ball(bx, by)
         frames.append(TrackingFrame(
             t=round((i - 3) / 10, 3), players=players,
-            ball=Ball(los, 26.0) if with_ball else None,
+            ball=ball,
             events=["ball_snap"] if i == 3 else [],
         ))
     meta = {

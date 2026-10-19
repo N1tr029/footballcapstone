@@ -19,6 +19,10 @@ attacking +x. A broadcast clip has no ``playDirection`` column, so the pipeline'
 output runs whichever way the camera saw it, and the play model takes direction as a
 *feature* — a mirrored play is scored against the wrong half of what it learnt.
 
+The last step needs the first four: the throw is found by asking when the ball was
+away from *every* player, and fifty-odd tracks include strays standing in the middle
+of the field that a thrown ball would never escape.
+
 What this cannot supply is the ball. Without a ball track there is no passer, no
 targeted receiver, no throw and no arrival, and the review has nothing to key a
 forecast on. :class:`PrepareReport` says so rather than letting the chain fail three
@@ -32,6 +36,7 @@ from typing import Any
 
 from . import field as fieldmod
 from . import roster as rostermod
+from . import events as eventsmod
 from . import sides as sidesmod
 from .contract import PlayTrack
 
@@ -59,6 +64,8 @@ class PrepareReport:
     ball_measured: float = 0.0
     """Fraction of ball samples that were actually detected rather than coasted."""
     ball_coverage: float = 0.0
+    events: Any = None
+    """The derived pass window, or None when one was not looked for."""
     ball_travelled: float = 0.0
     """Yards between the extremes of the ball track. A ball that never moved is
     not a ball, however often it was detected."""
@@ -85,6 +92,12 @@ class PrepareReport:
                 f"travelled {self.ball_travelled:.1f} yd"
             )
         )
+        if self.events is not None and self.events.found:
+            lines.append(
+                f"  pass window       thrown {self.events.thrown_at:.2f}s, arrived "
+                f"{self.events.arrived_at:.2f}s, {self.events.flight_yards:.1f} yd "
+                f"in the air"
+            )
         lines.append("")
         lines.append(f"  reviewable        {'yes' if self.reviewable else 'NO'}")
         for b in self.blockers:
@@ -105,6 +118,7 @@ class PrepareReport:
             "ball_coverage": round(self.ball_coverage, 3),
             "ball_travelled": round(self.ball_travelled, 2),
             "reviewable": self.reviewable,
+            "events": self.events.to_json() if self.events is not None else None,
             "blockers": list(self.blockers),
             "notes": list(self.notes),
         }
@@ -158,9 +172,16 @@ def prepare(track: PlayTrack, offense: str | None = None) -> tuple[PlayTrack, Pr
             "snap rather than the first frame of the window."
         )
     elif report.sides.confidence < 0.9:
-        report.blockers.append(
-            f"possession is a weak call ({report.sides.method}, "
-            f"{report.sides.confidence}); everything downstream inherits that."
+        # A note, not a blocker. presnap_stillness is a real method with a measured
+        # accuracy of 0.812, and it is the only one available on footage with no
+        # graphics — blocking on it means a coach's upload can never be reviewed.
+        # It does mean roughly one play in five has the sides the wrong way round,
+        # so it rides through meta into the review's assumptions rather than being
+        # swallowed here.
+        report.notes.append(
+            f"possession is a {report.sides.confidence:.0%} call "
+            f"({report.sides.method}); the sides being swapped would make the whole "
+            f"review wrong, and nothing downstream can detect that on its own."
         )
 
     # --- which way is downfield ----------------------------------------------
@@ -236,6 +257,20 @@ def prepare(track: PlayTrack, offense: str | None = None) -> tuple[PlayTrack, Pr
             f"is behind somebody most of the play; the generic sports-ball class "
             f"was not trained on one."
         )
+
+    # --- the throw and the arrival --------------------------------------------
+    # Last, because it needs the ball and a consolidated roster: the flight test is
+    # "far from every player", and fifty-odd tracks include strays standing in the
+    # middle of the field that a thrown ball would never get away from.
+    if report.has_ball and not report.blockers:
+        found = eventsmod.apply(out)
+        report.events = found
+        if not found.found:
+            report.blockers.append(
+                "no throw could be found in the ball track: "
+                + (found.notes[-1] if found.notes else "no reason given")
+                + ". The review needs a throw and an arrival to forecast between."
+            )
 
     report.reviewable = not report.blockers
     out.meta["prepare_report"] = report.to_json()

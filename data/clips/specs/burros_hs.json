@@ -1,0 +1,55 @@
+{
+  "name": "burros_hs",
+  "video": "data/clips/BurrosBlancos_vs_AguilasBlancas_ohs22.ogv",
+  "start": 120,
+  "stop": 270,
+  "step": 1,
+  "snap_frame": 120,
+  "fps": null,
+  "out_fps": 12,
+  "title": "Mexican high school \u2014 640x360, the hardest one",
+  "notes": "",
+  "detect": {
+    "weights": "yolo11x.pt",
+    "conf": 0.25,
+    "imgsz": 1280,
+    "device": null,
+    "max_players": null,
+    "field_margin": 4.0,
+    "tiles": 1,
+    "tile_overlap": 0.2,
+    "merge_iou": 0.55
+  },
+  "register": {
+    "mode": "auto",
+    "frame": null,
+    "level": null,
+    "homography": null,
+    "model": "gemini-flash-lite-latest",
+    "propagate": true,
+    "min_paint": 1.6,
+    "min_inliers": 25,
+    "horizon_frac": 0.35,
+    "candidate_frames": [
+      145,
+      195,
+      245
+    ]
+  },
+  "track": {
+    "gate_yards": 2.5,
+    "max_age": 8,
+    "min_hits": 3,
+    "process_noise": 6.0,
+    "measurement_noise": 0.35,
+    "smooth_window": 7,
+    "keep_unlabelled": true,
+    "teams": true,
+    "chroma_only": false,
+    "team_clusters": 2,
+    "drop_static_sideline": true,
+    "static_yards": 1.0,
+    "sideline_band": 2.0,
+    "ball": false
+  }
+}

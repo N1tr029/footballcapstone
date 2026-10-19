@@ -14,6 +14,14 @@ dist/
 data/**
 !data/.gitkeep
 
+# ...except the clip specs. They are not data: they are the tuned configuration a
+# clip took hours to arrive at — the window, the snap, the detector settings and a
+# checked homography that the vision model is not asked for twice. Ignoring them
+# means the pipeline is reproducible only on the laptop that first ran it.
+!data/clips/
+!data/clips/specs/
+!data/clips/specs/*.json
+
 # Environment
 .env
 .env.local

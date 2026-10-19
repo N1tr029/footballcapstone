@@ -1,0 +1,55 @@
+{
+  "name": "ucf_kickoff",
+  "video": "data/clips/UCF_Kickoff_%2831018220288%29.webm",
+  "start": 60,
+  "stop": 210,
+  "step": 1,
+  "snap_frame": 60,
+  "fps": null,
+  "out_fps": 12,
+  "title": "UCF kickoff \u2014 1080p, elevated",
+  "notes": "",
+  "detect": {
+    "weights": "yolo11x.pt",
+    "conf": 0.25,
+    "imgsz": 1280,
+    "device": null,
+    "max_players": null,
+    "field_margin": 4.0,
+    "tiles": 1,
+    "tile_overlap": 0.2,
+    "merge_iou": 0.55
+  },
+  "register": {
+    "mode": "auto",
+    "frame": null,
+    "level": null,
+    "homography": null,
+    "model": "gemini-flash-lite-latest",
+    "propagate": true,
+    "min_paint": 1.6,
+    "min_inliers": 25,
+    "horizon_frac": 0.35,
+    "candidate_frames": [
+      85,
+      135,
+      185
+    ]
+  },
+  "track": {
+    "gate_yards": 2.5,
+    "max_age": 8,
+    "min_hits": 3,
+    "process_noise": 6.0,
+    "measurement_noise": 0.35,
+    "smooth_window": 7,
+    "keep_unlabelled": true,
+    "teams": true,
+    "chroma_only": false,
+    "team_clusters": 2,
+    "drop_static_sideline": true,
+    "static_yards": 1.0,
+    "sideline_band": 2.0,
+    "ball": false
+  }
+}

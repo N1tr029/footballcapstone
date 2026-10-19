@@ -1,0 +1,70 @@
+{
+  "name": "nw_michigan",
+  "video": "data/clips/Northwestern_vs._Michigan_FOX-COLLEGE-FOOTBALL-HIGHLIGHTS.webm",
+  "title": "Northwestern at Michigan (FOX) - elevated sideline",
+  "notes": "The reference clip. Registration read off frame 150 by the vision model, halves derived from the number sequence, then snapped onto the painted yard lines: alignment 1.12 -> 3.53. Pinned so the render loop is deterministic and fast.",
+  "start": 150,
+  "stop": 300,
+  "step": 1,
+  "snap_frame": 150,
+  "fps": null,
+  "out_fps": 12,
+  "detect": {
+    "weights": "yolo11x.pt",
+    "conf": 0.25,
+    "imgsz": 1280,
+    "device": null,
+    "max_players": null,
+    "field_margin": 4.0,
+    "tiles": 1,
+    "tile_overlap": 0.2,
+    "merge_iou": 0.55,
+    "sideline_cut": true
+  },
+  "register": {
+    "mode": "pinned",
+    "frame": 150,
+    "level": "college",
+    "homography": [
+      [
+        53.32671,
+        16.618761,
+        -2074.005842
+      ],
+      [
+        2.05646,
+        -12.713733,
+        706.619102
+      ],
+      [
+        0.000419,
+        0.014287,
+        1.0
+      ]
+    ],
+    "model": null,
+    "candidate_frames": []
+  },
+  "track": {
+    "gate_yards": 2.5,
+    "max_age": 12,
+    "min_hits": 3,
+    "process_noise": 6.0,
+    "measurement_noise": 0.35,
+    "smooth_window": 7,
+    "keep_unlabelled": true,
+    "teams": true,
+    "chroma_only": false,
+    "ball": false,
+    "team_clusters": 2,
+    "drop_static_sideline": true,
+    "static_yards": 1.0,
+    "sideline_band": 2.0,
+    "pre_teams": true,
+    "team_cost": 2.0,
+    "stitch": true,
+    "stitch_gap_s": 1.2,
+    "stitch_gate": 3.5
+  },
+  "distance_yards": 6
+}

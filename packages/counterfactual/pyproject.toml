@@ -1,0 +1,35 @@
+[project]
+name = "gridiron-counterfactual"
+version = "0.1.0"
+description = "Play model — outcome forecast, decision review, and the bridges to the shared contract"
+requires-python = ">=3.11"
+
+# numpy/pandas are the model's own; gridiron-tracking is here because the four
+# adapter modules are nothing but conversions into its contract, and a copy of
+# that contract in this package would be a second answer to "which way is +y".
+# It is a path dependency rather than a version: the two move together, in one
+# repository, and pinning a released version of a sibling package that is never
+# released would be theatre.
+dependencies = [
+  "numpy>=1.24",
+  "pandas>=2.0",
+  "scikit-learn>=1.3",
+  "joblib>=1.3",
+  "gridiron-tracking",
+]
+
+[project.optional-dependencies]
+# Only needed to fetch the Big Data Bowl release. Everything in this package —
+# the adapters, the contract mapping, the whole test suite — runs without a Kaggle
+# account and without a byte of the competition data on disk.
+data = ["kagglehub>=0.3.12"]
+
+[tool.uv.sources]
+gridiron-tracking = { path = "../tracking", editable = true }
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["gridiron_counterfactual*"]

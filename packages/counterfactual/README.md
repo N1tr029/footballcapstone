@@ -1,4 +1,73 @@
-# NFL Play Decision Prototype
+# packages/counterfactual — the play model
+
+Stream 3 of [docs/roles.md](../../docs/roles.md). Given the state at the snap: what
+should have been called, and what would have happened.
+
+Two things live here.
+
+**`decision_engine.py`** is Landon's prototype, merged into this repository with its
+own history. It trains on the Big Data Bowl 2026 release, forecasts where everyone
+will be while the ball is in the air, and writes a typed judgement per play. Its
+documentation is below, unchanged.
+
+**`gridiron_counterfactual/`** is the part that connects it to everything else. The
+prototype speaks the competition's dialect — its column names, its coordinates, its
+compass bearings, its own report shape — and nothing else in the repository speaks
+that dialect. These four modules are the translation, and they are deliberately the
+only place it happens:
+
+| module | direction | why it exists |
+|---|---|---|
+| `bdb` | release → `PlayTrack` | so the model's own training plays can be drawn by the renderer |
+| `features` | `PlayTrack` → model rows | so the model can score the **vision pipeline's** output, not only Kaggle's |
+| `forecast` | predictions → `PlayTrack` | so a counterfactual is a play stream 1 can animate, labelled SIMULATED |
+| `recommendation` | report → `Recommendation` | so stream 5 can draw the What-If panel against the contract |
+
+```bash
+python -m pytest packages/counterfactual/tests -q
+```
+
+## The one that can fail silently
+
+`features` is the load-bearing one, and the reason is worth reading before changing
+it. `coordinate_model.joblib` was fitted on the release exactly as it ships: x and y
+unmirrored, with `play_direction_code` as a *feature* so the model learns the two
+cases separately, and `dir`/`o` as compass bearings. A `PlayTrack` is neither: it is
+mirrored so the offense always attacks +x, and its angles are the mathematical
+convention.
+
+Hand a model trained in one frame of reference a row from the other and nothing
+raises. The features are all in range, the regressors return plausible yards, and
+the predicted play is a **reflection** of the real one. `features.round_trip_error`
+exists to prove the conversions are exact inverses — release rows in, `PlayTrack`,
+back out, measured against what the file started with — and a test asserts it on a
+left-direction play, which is the case that carries the mirroring. Delete the
+mirror and that test reports a 57-yard error.
+
+## What the model does not produce, and therefore does not claim
+
+The `Recommendation` contract asks for an expected value, a win-probability delta,
+and one outcome per defensive response. This model produces none of the three, so
+all three are left empty and every gap is listed in `assumptions` — a UI cannot tell
+"not modelled" from "modelled as zero" unless it is told, and `recommendation.validate`
+fails a report that leaves a number unset without saying why.
+
+In particular `expected_points_added` is **not** the recommendation's expected value.
+It is the EPA of the play as actually called, lifted from play-by-play. Copied into
+`expected_value` it would produce a panel claiming the recommendation's value is
+exactly the result of ignoring the recommendation. It is kept under `review`, beside
+the other things that actually happened.
+
+One field was added to the contract rather than bent: `choice_probabilities`. This
+model reports a distribution over *which call to make*; the contract's `outcomes` is
+a distribution over *defensive responses*. Same shape, different object, and filing
+one as the other would mislabel it in every view at once.
+
+---
+
+## The prototype
+
+Original notes, as merged.
 
 This starter project uses NFL Big Data Bowl 2026 tracking data to forecast player
 locations during the airborne part of a pass, then create a **post-play review**:

@@ -28,8 +28,27 @@ and sim racing: same pipeline shape, different sport.
 
 ## Status
 
-**Scaffolding only.** The directory layout and the plan are here; the code is not
-written yet. Nothing below is implemented.
+Four streams of five are in one tree and the data flows between them. `python -m
+pytest` at the root is **150 tests**, green.
+
+| stream | state |
+|---|---|
+| 2 — footage → tracking | [`packages/tracking`](packages/tracking) — layer 2 built and validated against real tracking; layer 1's back half built and measured in yards. A real detector on real pixels is next |
+| 3 — play model | [`packages/counterfactual`](packages/counterfactual) — outcome forecast and typed decision review, merged with its history, bridged to the contract in all three directions |
+| 1 — replay & visualization | [`packages/replay-engine/prototype`](packages/replay-engine/prototype) — one play, scrubbable, hand-authored. Proves the data model animates |
+| 5 — app & product | [`apps/desktop`](apps/desktop) — **not merged.** The frontend is private and the seam it lands on is written down |
+| 4 — data platform | `packages/shared`, `apps/api` — not started. `PlayState` is still unwritten, and the contracts live in the packages that produce them until it is |
+
+The join itself is real rather than co-location: a Big Data Bowl play becomes a
+`PlayTrack`, goes back through the feature builder into the frame of reference the
+model was fitted in, is scored by the committed regressors, and comes back as a
+simulated `PlayTrack` the renderer can draw — with provenance saying it never
+happened. That path is a test, and it runs against the real fitted model file.
+
+**Not done, and worth saying plainly:** there is no win-probability model, so the
+headline "+0.11 win probability" below is an aspiration, not an output. The play
+model reports a distribution over calls; `expected_value` and `win_prob_delta` are
+`null` with an assumption attached saying why.
 
 ---
 
@@ -89,6 +108,15 @@ tests/
 
 ---
 
+## Run it
+
+```bash
+python -m pytest
+```
+
+Both Python packages, from a bare checkout — `pytest.ini` puts them on the path, so
+nothing needs installing first. Each also runs on its own.
+
 ## Prototype
 
 [`packages/replay-engine/prototype`](packages/replay-engine/prototype) — the Philly
@@ -102,12 +130,19 @@ exists to prove the data model animates.
 
 Capstone project.
 
-| | GitHub |
-|---|---|
-| Jeremy | [@EllisJeremy](https://github.com/EllisJeremy) |
-| Landon | [@landonDuba](https://github.com/landonDuba) |
-| Abhi | [@chadiveabhi](https://github.com/chadiveabhi) |
-| Connor | [@connorh27](https://github.com/connorh27) |
+| | GitHub | Stream |
+|---|---|---|
+| Hassan | [@N1tr029](https://github.com/N1tr029) | 2 — footage → tracking |
+| Landon | [@landonDuba](https://github.com/landonDuba) | 3 — play model |
+| Jeremy | [@EllisJeremy](https://github.com/EllisJeremy) | 5 — app & frontend |
+| Abhi | [@chadiveabhi](https://github.com/chadiveabhi) | |
+| Connor | [@connorh27](https://github.com/connorh27) | |
+
+Merged in from where the work was done, histories intact:
+[`capstone-ML-model`](https://github.com/landonDuba/capstone-ML-model) →
+`packages/counterfactual`. Still outstanding:
+[`hindsight-frontend`](https://github.com/EllisJeremy/hindsight-frontend) →
+`apps/desktop` (see [apps/desktop/README.md](apps/desktop/README.md)).
 
 ---
 

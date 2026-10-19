@@ -176,13 +176,18 @@ internals. If you need a new field, it goes in the contract and everyone gets it
 
 ## Who takes what
 
-| Stream | Owner |
-|---|---|
-| 1 — Replay & visualization | |
-| 2 — Footage → tracking data | |
-| 3 — Play model | |
-| 4 — Data platform & pipeline | |
-| 5 — App, integration & product | |
+| Stream | Owner | Where the work is |
+|---|---|---|
+| 1 — Replay & visualization | | `packages/replay-engine` — prototype only |
+| 2 — Footage → tracking data | Hassan | `packages/tracking` |
+| 3 — Play model | Landon | `packages/counterfactual` |
+| 4 — Data platform & pipeline | | not started |
+| 5 — App, integration & product | Jeremy | `apps/desktop` — frontend not merged yet |
+
+Two rows are still open. Stream 4 is the one roles.md warns about — "the one that
+quietly determines whether the other four ever meet" — and it is currently nobody's:
+`packages/shared` is empty, `PlayState` is unwritten, and the contracts live in the
+packages that produce them as a stopgap. Abhi and Connor are unassigned here.
 
 Streams 2 and 3 are the research risk; 4 is the one that quietly determines
 whether the other four ever meet. If someone has to carry two, the safe pairing

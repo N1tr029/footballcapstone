@@ -195,3 +195,65 @@ def test_a_play_with_no_snap_says_its_clock_is_arbitrary():
     track = hindsight.read_play(doc)
     assert "clock_warning" in track.meta
     assert track.times[0] == 0.0
+
+
+# --------------------------------------------------- vision tracks, which have no ids
+
+
+def _vision_track():
+    """A track shaped like the vision pipeline's output: anonymous, team-only."""
+    from gridiron_tracking.contract import (
+        Ball, PlayTrack, PlayerFrame, RosterEntry, TrackingFrame,
+    )
+
+    roster = {f"t{i}": RosterEntry(id=f"t{i}", team="teamA" if i % 2 else "teamB")
+              for i in range(22)}
+    frames = [
+        TrackingFrame(
+            t=round(i / 10, 3),
+            players={pid: PlayerFrame(x=40.0 + i * 0.3 + j, y=10.0 + j,
+                                      s=4.0, dir=0.0, o=0.0, o_source="from_velocity")
+                     for j, pid in enumerate(roster)},
+            ball=Ball(45.0, 26.0),
+            events=["ball_snap"] if i == 0 else [],
+        )
+        for i in range(12)
+    ]
+    return PlayTrack(meta={"source": "vision", "rate": 10, "game_id": 0, "play_id": 1},
+                     roster=roster, frames=frames)
+
+
+def test_anonymous_tracks_get_distinct_ids_rather_than_all_becoming_zero():
+    """The Unity client matches players by nflId, so a shared id merges them.
+
+    The vision pipeline names its tracks t0, t1, t17. Mapping each to 0 — which is
+    what an int() cast does — put all 46 tracks of a real clip onto one player.
+    """
+    track = _vision_track()
+    doc = hindsight.to_play_json(track)
+
+    ids = [p["nflId"] for p in doc["players"]]
+    assert len(set(ids)) == len(track.roster) == 22
+    assert all(i > hindsight.SYNTHETIC_ID_BASE for i in ids), (
+        "synthetic ids must sit above the real nflId range so a vision track "
+        "cannot be mistaken for identified players"
+    )
+    # The original track name survives, or there is no way back to the track.
+    assert {p["trackId"] for p in doc["players"]} == set(track.roster)
+    # Frames use the same ids as the roster, or the client matches nothing.
+    assert {q["nflId"] for f in doc["frames"] for q in f["players"]} <= set(ids)
+
+
+def test_synthetic_ids_are_stable_across_exports():
+    """A re-export must not shuffle the roster."""
+    track = _vision_track()
+    first = hindsight.nfl_ids(track)
+    assert first == hindsight.nfl_ids(_vision_track())
+    assert first == hindsight.nfl_ids(track)
+
+
+def test_real_ids_are_left_alone():
+    track = hindsight.read_play(some_plays(1)[0])
+    ids = hindsight.nfl_ids(track)
+    assert ids == {pid: int(pid) for pid in track.roster}
+    assert all(i < hindsight.SYNTHETIC_ID_BASE for i in ids.values())

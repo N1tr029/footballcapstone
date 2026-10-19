@@ -74,15 +74,26 @@ def to_ngs_angle(a: float, flip: bool) -> float:
     return float(ngs.contract_angle_to_ngs(a))
 
 
-def last_state(track: PlayTrack) -> pd.DataFrame:
-    """Every player's final observed sample, in the release's frame of reference.
+def last_state(track: PlayTrack, at: float | None = None) -> pd.DataFrame:
+    """Every player's last sample at or before ``at``, in the release's frame.
 
-    The model's state row is the last pre-throw frame, so the last frame of the
-    track is the right one — but tracks from video are ragged, and a player
-    swallowed by the pile is genuinely absent from the tail rather than stationary
-    in it. So this takes each player's own last sample, not the last frame's
-    members, which is also what ``decision_engine.last_states`` does with its
-    ``groupby(...).tail(1)``.
+    ``at`` is the instant the forecast starts from, and getting it wrong is not a
+    small error. The model was fitted on the 2026 competition file, whose input
+    ends at the throw: its state row is the last **pre-throw** frame and its labels
+    are where everyone went while the ball was in the air. Hand it the last frame
+    of a whole play instead — which is what omitting ``at`` does on a track that
+    runs to the tackle — and it is being asked to continue a play that is already
+    over, from a state it never saw in training. The numbers come back without
+    complaint and mean nothing.
+
+    So callers reviewing a pass pass the throw time; see
+    :func:`gridiron_counterfactual.review.review_play`. ``at=None`` keeps the old
+    behaviour, which is correct for a track that genuinely ends at the throw.
+
+    Tracks from video are ragged — a player swallowed by the pile is genuinely
+    absent from the tail rather than stationary in it — so this takes each player's
+    own last sample rather than the last frame's membership, which is what
+    ``decision_engine.last_states`` does with its ``groupby(...).tail(1)``.
     """
     flip = str(track.meta.get("play_direction", "right")).lower() == "left"
     roles = track.meta.get("roles") or {}
@@ -90,6 +101,8 @@ def last_state(track: PlayTrack) -> pd.DataFrame:
     rows = []
     for pid in track.roster:
         series = track.series(pid)
+        if at is not None:
+            series = [(t, p) for t, p in series if t <= at]
         if not series:
             continue
         t, p = series[-1]
@@ -111,7 +124,8 @@ def last_state(track: PlayTrack) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def feature_rows(track: PlayTrack, horizons: int | None = None) -> pd.DataFrame:
+def feature_rows(track: PlayTrack, horizons: int | None = None,
+                 at: float | None = None) -> pd.DataFrame:
     """One row per player per forecast step, ready for ``model.predict``.
 
     ``horizons`` is how many 10 Hz steps ahead to ask for; it defaults to the
@@ -126,9 +140,14 @@ def feature_rows(track: PlayTrack, horizons: int | None = None) -> pd.DataFrame:
     in training got the same treatment; not tolerable when it silently turns one
     play's forecast into nonsense.
     """
-    state = last_state(track)
+    state = last_state(track, at=at)
     if state.empty:
-        raise ValueError("this track has no player samples at all")
+        raise ValueError(
+            "this track has no player samples at all"
+            if at is None else
+            f"no player samples at or before t={at}; the forecast has nothing to "
+            f"start from"
+        )
 
     missing = [
         name for name, key in (

@@ -217,16 +217,20 @@ def to_play_json(
                     min(ball.x + float(state["yardsToGo"]), 110.0), 2
                 )
 
+    ids = nfl_ids(track)
     players = [
         {
-            "nflId": _maybe_int(entry.id) if _maybe_int(entry.id) is not None else 0,
-            "name": entry.name or entry.label or entry.id,
+            "nflId": ids[pid],
+            "name": entry.name or entry.label or pid,
             "jerseyNumber": entry.num if entry.num is not None else 0,
             "club": entry.team,
             "position": entry.role or "",
             "side": _side(entry.team),
+            # Outside schemaVersion 1, and the only way back to the track this came
+            # from once the id has been synthesised.
+            "trackId": pid,
         }
-        for entry in track.roster.values()
+        for pid, entry in track.roster.items()
     ]
 
     frames = []
@@ -238,7 +242,7 @@ def to_play_json(
             "event": f.events[0] if f.events else None,
             "players": [
                 {
-                    "nflId": _maybe_int(pid) if _maybe_int(pid) is not None else 0,
+                    "nflId": ids[pid],
                     "x": round(p.x, 2),
                     "y": round(p.y, 2),
                     "o": round(float(contract_angle_to_ngs(p.o)), 2),
@@ -334,6 +338,37 @@ def write_index(
 
 
 # ------------------------------------------------------------------- helpers
+
+
+def nfl_ids(track: PlayTrack) -> dict[str, int]:
+    """A stable integer id per player, because the Unity client keys on one.
+
+    Its ``CLAUDE.md`` is explicit that players are matched by ``nflId`` and not by
+    array position, so every player needs one and no two may share it. A track from
+    a public release already has one. A track from the vision pipeline does not: its
+    ids are ``t0``, ``t1``, ``t17`` — and mapping each of those to 0 puts the whole
+    roster onto one player, which is what happened before this function existed.
+
+    Synthetic ids start at :data:`SYNTHETIC_ID_BASE`, which is far above the real
+    nflId range, so a vision track can never be mistaken for identified players.
+    They are assigned in sorted order, so exporting the same track twice gives the
+    same ids and a re-export does not shuffle the roster.
+    """
+    out: dict[str, int] = {}
+    synthetic = 0
+    for pid in sorted(track.roster):
+        real = _maybe_int(pid)
+        if real is not None and 0 < real < SYNTHETIC_ID_BASE:
+            out[pid] = real
+        else:
+            synthetic += 1
+            out[pid] = SYNTHETIC_ID_BASE + synthetic
+    return out
+
+
+SYNTHETIC_ID_BASE = 900_000
+"""Where made-up player ids start. Real nflIds are five digits, so anything at or
+above this is this repository's invention and says so by its magnitude."""
 
 
 def _side(team: str | None) -> str:

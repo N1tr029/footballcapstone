@@ -42,6 +42,7 @@ def to_play_track(
     x_col: str = "pred_x",
     y_col: str = "pred_y",
     step_col: str = "horizon",
+    t0: float | None = None,
 ) -> PlayTrack:
     """Forecast rows plus the play they continue, as one simulated play.
 
@@ -65,7 +66,11 @@ def to_play_track(
 
     flip = str(source.meta.get("play_direction", "right")).lower() == "left"
     dt = 1.0 / RATE
-    t0 = source.times[-1] if source.frames else 0.0
+    # The forecast continues from the instant it was made, which is the throw on a
+    # pass rather than the end of the play. Defaults to the end of the source track,
+    # which is right only when the track itself ends where the forecast starts.
+    if t0 is None:
+        t0 = source.times[-1] if source.frames else 0.0
 
     steps = sorted(int(s) for s in predictions[step_col].unique())
     if steps != list(range(1, len(steps) + 1)):
@@ -185,6 +190,7 @@ def predict(
     track: PlayTrack,
     model_path: str,
     horizons: int | None = None,
+    at: float | None = None,
 ) -> pd.DataFrame:
     """Score one play with the fitted model, returning rows :func:`to_play_track` takes.
 
@@ -201,7 +207,7 @@ def predict(
     cols = list(bundle.get("feature_columns") or features.FEATURE_COLUMNS)
     models = bundle["models"]
 
-    rows = features.feature_rows(track, horizons=horizons)
+    rows = features.feature_rows(track, horizons=horizons, at=at)
     missing = [c for c in cols if c not in rows.columns]
     if missing:
         raise ValueError(

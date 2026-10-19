@@ -5,6 +5,8 @@
     python -m gridiron_tracking render --all                # every clip, one table
     python -m gridiron_tracking render nw_michigan --force detect
     python -m gridiron_tracking add ucf_kickoff data/clips/UCF.webm --start 60 --stop 210
+    python -m gridiron_tracking unity nw_michigan            # watch it in the Unity app
+    python -m gridiron_tracking unity --all                   # every clip, beside the real plays
 
 ``--all`` is the one that matters. A change that lifts one clip and drops three is the
 normal outcome of tuning, and the only way to see it is to render them together and read
@@ -81,6 +83,104 @@ def _add(args) -> int:
     return 0
 
 
+UNITY_PLAYS = Path("packages/replay-engine/hindsight/Assets/StreamingAssets/plays")
+"""Where the Unity app loads plays from. Its PlayLoader reads index.json and then
+``{gameId}_{playId}.json`` beside it, so writing here is the whole install step."""
+
+
+def _unity(args) -> int:
+    """A rendered clip, written where the Unity app will play it back.
+
+    This is the join between stream 2 and stream 1: the clip has already become a
+    PlayTrack, so showing it is a schema translation and not new science. The
+    tracking is what it is — read the clip's report.txt before believing the
+    animation, because a smooth replay of a bad track looks exactly as convincing
+    as a smooth replay of a good one.
+    """
+    import json
+
+    from . import hindsight
+    from .contract import PlayTrack, validate
+
+    names = available(args.spec_dir) if args.all else args.clip
+    if not names:
+        print("name a clip, or pass --all", file=sys.stderr)
+        return 1
+
+    out = args.unity_dir
+    tracks, skipped = [], []
+
+    if not args.replace:
+        # The app ships 115 real plays; keeping them means the navigator shows the
+        # tracked clips beside measured tracking, which is the comparison worth
+        # having in front of anybody judging this.
+        for path in hindsight.plays_in(out):
+            # Skip this command's own previous output, or re-exporting accumulates
+            # a stale copy of every clip under its old play id.
+            if path.name.startswith(f"{CLIP_GAME_ID}_"):
+                continue
+            try:
+                tracks.append(hindsight.read_play(path))
+            except Exception as e:  # noqa: BLE001
+                skipped.append((path.name, f"{type(e).__name__}: {e}"))
+
+    for i, name in enumerate(names):
+        track_path = args.runs / name / "track.json"
+        if not track_path.exists():
+            skipped.append((name, f"no track.json — run `render {name}` first"))
+            continue
+
+        track = PlayTrack.from_json(json.loads(track_path.read_text()))
+        v = validate(track)
+
+        # The app keys plays on (gameId, playId) and a vision track has neither, so
+        # clips are numbered off a base that cannot collide with a real game id.
+        track.meta["game_id"] = CLIP_GAME_ID
+        # High play ids so clips sort after any real play: the navigator opens on
+        # the first play in the index, and that should be measured tracking rather
+        # than a clip, unless the clips are all there is (--replace).
+        track.meta["play_id"] = CLIP_PLAY_BASE + i
+        track.meta.setdefault("description", f"{name} — tracked from video")
+        track.meta.setdefault("possessionTeam", "")
+        track.meta.setdefault("quarter", 1)
+        # Their own drive bucket, so the accordion does not file a clip among the
+        # real plays of a drive it had nothing to do with.
+        track.meta.setdefault("driveNumber", CLIP_DRIVE)
+        track.meta.setdefault("gameClock", "--:--")
+
+        path = hindsight.write_play(out, track)
+        tracks.append(track)
+        flag = "" if v.ok else f"  [contract: {'; '.join(v.problems)}]"
+        print(f"  {name:<18} {len(track.frames):>4} frames  {len(track.roster):>3} tracks"
+              f"  -> {path.name}{flag}")
+
+    if not tracks:
+        print("nothing written", file=sys.stderr)
+        for name, why in skipped:
+            print(f"  {name}: {why}", file=sys.stderr)
+        return 1
+
+    # One index, possibly two games in it. Its top-level gameId is informational —
+    # the client fetches each play by its own id — so it names the majority game
+    # rather than whichever happens to sort first.
+    from collections import Counter
+    majority = Counter(t.meta.get("game_id") for t in tracks).most_common(1)[0][0]
+    index = hindsight.write_index(out, tracks, game_id=majority)
+    print(f"\n  index.json  {len(tracks)} plays -> {index}")
+    for name, why in skipped:
+        print(f"  skipped {name}: {why}")
+    print("\nIn Unity: Hindsight > Setup Scene (once), then press Play.")
+    return 0
+
+
+CLIP_GAME_ID = 999_000_001
+"""Game id for plays that came from a clip rather than a game. Real ids are ten
+digits beginning with the date, so this cannot collide with one."""
+
+CLIP_PLAY_BASE = 900_000
+CLIP_DRIVE = 99
+
+
 def main(argv=None) -> int:
     load_env()
     ap = argparse.ArgumentParser(prog="python -m gridiron_tracking")
@@ -108,8 +208,18 @@ def main(argv=None) -> int:
     a.add_argument("--title", default="")
     a.set_defaults(fn=_add)
 
+    u = sub.add_parser("unity", help="write rendered clips where the Unity app reads them")
+    u.add_argument("clip", nargs="*")
+    u.add_argument("--all", action="store_true")
+    u.add_argument("--runs", type=Path, default=Path("data/runs"))
+    u.add_argument("--unity-dir", type=Path, default=UNITY_PLAYS)
+    u.add_argument("--replace", action="store_true",
+                   help="index only these clips, dropping the app's own 115 real "
+                        "plays from the navigator (the files stay on disk)")
+    u.set_defaults(fn=_unity)
+
     args = ap.parse_args(argv)
-    if args.cmd == "render" and not args.all and not args.clip:
+    if args.cmd in ("render", "unity") and not args.all and not args.clip:
         ap.error("name a clip, or pass --all")
     return args.fn(args)
 

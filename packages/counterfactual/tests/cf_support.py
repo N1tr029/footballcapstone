@@ -157,3 +157,8 @@ def predictions_from(track, horizons: int = 15, jitter: float = 0.0) -> pd.DataF
                 "pred_y": r["y"] + r["s"] * np.cos(theta) * t + rng.normal(0, jitter),
             })
     return pd.DataFrame(rows)
+
+
+# The Unity app's real plays, merged in from hindsight-frontend. Suites that use
+# them skip when the subtree is absent.
+HINDSIGHT_PLAYS = REPO / "packages/replay-engine/hindsight/Assets/StreamingAssets/plays"

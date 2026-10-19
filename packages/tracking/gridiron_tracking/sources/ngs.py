@@ -44,11 +44,14 @@ ALIASES: dict[str, tuple[str, ...]] = {
     "game_id": ("gameId", "game_id", "gameKey", "game_key"),
     "play_id": ("playId", "play_id", "playID"),
     "game_play": ("game_play",),
-    "player_id": ("nflId", "nfl_player_id", "nflID", "player_id", "player"),
+    "player_id": ("nflId", "nfl_player_id", "nflID", "nfl_id", "player_id", "player"),
     "display_name": ("displayName", "display_name", "player_name"),
     "jersey": ("jerseyNumber", "jersey_number", "jersey"),
     "position": ("position", "officialPosition", "player_position"),
-    "team": ("team", "club", "teamAbbr", "team_abbr"),
+    # "player_side" is last: it is the 2026 release's only statement of which way a
+    # man is facing, and it says "Offense"/"Defense" rather than a club. Any release
+    # that names its clubs resolves on an earlier spelling and is unaffected.
+    "team": ("team", "club", "teamAbbr", "team_abbr", "player_side"),
     "frame": ("frame.id", "frameId", "frame_id", "step", "frame"),
     "time": ("time", "datetime", "timestamp"),
     "x": ("x",),
@@ -60,6 +63,15 @@ ALIASES: dict[str, tuple[str, ...]] = {
     "o": ("o", "orientation"),
     "event": ("event",),
     "play_direction": ("playDirection", "play_direction"),
+    # --- the 2026 release's per-play prediction task -------------------------
+    # Not tracking measurements, but they key the play model's features, and
+    # load_tracking drops anything it cannot name — so they are named here rather
+    # than re-reading the CSV a second way in packages/counterfactual.
+    "role": ("player_role", "role"),
+    "ball_land_x": ("ball_land_x",),
+    "ball_land_y": ("ball_land_y",),
+    "yardline": ("absolute_yardline_number", "yardlineNumber", "yardline_number"),
+    "frames_output": ("num_frames_output",),
 }
 
 REQUIRED = ("player_id", "frame", "x", "y")

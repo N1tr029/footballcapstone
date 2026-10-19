@@ -161,3 +161,36 @@ def clamp_to_field(x: float, y: float, spec: FieldSpec = NFL, margin: float = 5.
         min(max(x, -margin), spec.length + margin),
         min(max(y, -margin), spec.width + margin),
     )
+
+
+# --------------------------------------------------------------- normalisation
+
+
+def mirror_track(track):
+    """Turn a play round so the offense attacks +x, in place, and say so in meta.
+
+    The contract fixes the direction of attack: x runs 0-120 and the offense goes
+    toward +x. Public releases carry a ``playDirection`` column and
+    ``sources.ngs`` mirrors on it; a broadcast clip carries no such column, so a
+    vision track comes out in whatever direction the camera happened to see and
+    silently breaks that rule. Nothing complains — the renderer draws a play running
+    the wrong way perfectly smoothly, and the play model takes direction as a
+    *feature*, so it scores a mirrored play against the wrong half of what it learnt.
+
+    Mirroring the field through its centre is a 180 degree rotation, so every angle
+    turns by 180 too. This is the same transform ``ngs._angle`` applies, kept here
+    because two copies of it is one too many.
+    """
+    from .contract import wrap_deg
+
+    for f in track.frames:
+        for p in f.players.values():
+            p.x, p.y = LENGTH - p.x, WIDTH - p.y
+            p.dir = wrap_deg(p.dir + 180.0)
+            p.o = wrap_deg(p.o + 180.0)
+        if f.ball is not None:
+            f.ball.x, f.ball.y = LENGTH - f.ball.x, WIDTH - f.ball.y
+
+    track.meta["mirrored"] = not track.meta.get("mirrored", False)
+    track.meta["play_direction"] = "right"
+    return track

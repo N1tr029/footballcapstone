@@ -95,3 +95,61 @@ def test_side_by_side_writes_a_playable_file(tmp_path):
     assert ok, "the file must be readable"
     assert img.shape[0] == 180 * 2 + VER.PANEL_RULE_PX, \
         "both panels must be stacked, separated by the hairline rule"
+
+
+def _two_tracks_on_one_body(n=10):
+    """Two ids on one man — the defect the old scorer counted twice as a success."""
+    roster = {"p0": RosterEntry(id="p0", team="offense"),
+              "p0b": RosterEntry(id="p0b", team="defense")}
+    return PlayTrack(roster=roster, frames=[
+        TrackingFrame(t=round(k / 10.0, 3), players={
+            "p0": PlayerFrame(x=40.0, y=26.0),
+            "p0b": PlayerFrame(x=40.1, y=26.0),
+        }) for k in range(n)
+    ])
+
+
+def test_two_tracks_on_one_body_are_one_hit_and_one_duplicate():
+    """A box is one person, so it can be claimed once.
+
+    This is the whole reason the assignment is exclusive. Scored the old way — every
+    track taking whatever box contained it — this frame reads 2 of 2 agree, which is
+    how the reference clip reported 92.1% while one man in three wore two tracks.
+    """
+    cam = sideline_camera(image_size=(1280, 720), height=30.0, y=-40.0)
+    boxes = _boxes_from(_track(players=1), cam)
+    rep = VER.verify(_two_tracks_on_one_body(), _Reg(cam), boxes, fps=10.0)
+
+    assert all(f.on_player == 1 for f in rep.frames)
+    assert all(f.duplicate == 1 for f in rep.frames)
+    assert all(f.stray == 0 for f in rep.frames)
+    assert rep.agreement == pytest.approx(0.5)
+
+
+def test_a_clean_recreation_has_no_duplicates():
+    cam = sideline_camera(image_size=(1280, 720), height=30.0, y=-40.0)
+    t = _track()
+    rep = VER.verify(t, _Reg(cam), _boxes_from(t, cam), fps=10.0)
+    assert all(f.duplicate == 0 for f in rep.frames)
+    assert all(f.unclaimed == 0 for f in rep.frames)
+
+
+def test_the_duplicate_is_named_on_the_player_that_caused_it():
+    cam = sideline_camera(image_size=(1280, 720), height=30.0, y=-40.0)
+    boxes = _boxes_from(_track(players=1), cam)
+    rep = VER.verify(_two_tracks_on_one_body(), _Reg(cam), boxes, fps=10.0)
+    dupes = {p.player_id: p.duplicate for p in rep.players.values()}
+    assert sum(dupes.values()) == 10          # one per frame
+    assert sorted(dupes.values()) == [0, 10]  # and all of it on one of the two ids
+
+
+def test_the_ring_shrinks_with_distance():
+    """Ring size is geometry, not the width of whatever box it landed in."""
+    cam = sideline_camera(image_size=(1280, 720), height=30.0, y=-40.0)
+
+    def to_image(pts):
+        return np.asarray(cam.project([[p[0], p[1], 0.0] for p in pts]))[:, :2]
+
+    near = VER._player_radius(to_image, PlayerFrame(x=60.0, y=5.0))
+    far = VER._player_radius(to_image, PlayerFrame(x=60.0, y=50.0))
+    assert near > far, f"near {near} should be wider than far {far}"

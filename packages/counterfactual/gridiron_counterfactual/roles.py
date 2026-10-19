@@ -230,6 +230,16 @@ def _offense_of(track: PlayTrack) -> str | None:
         inferred = sides.infer_sides(track)
     except Exception:  # noqa: BLE001 - an unusable track is not an error here
         return None
+
+    # Respect the confidence. infer_sides reports 0.0 when it had nothing to go on —
+    # most often because the roster carries three team labels rather than two, which
+    # a vision track does whenever a few detections never got a kit — and it still
+    # returns a team name. Taking that name assigns one stray track's label as the
+    # whole offense and everybody else becomes a defender: on the reference clip
+    # that produced 44 "defenders" and 2 route runners, and the model then measures
+    # every receiver's separation against a crowd of phantoms.
+    if getattr(inferred, "confidence", 0.0) <= 0.0:
+        return None
     return getattr(inferred, "offense", None)
 
 

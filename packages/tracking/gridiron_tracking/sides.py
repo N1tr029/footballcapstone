@@ -65,12 +65,29 @@ class Sides:
         }
 
 
-def infer_sides(track: PlayTrack, offense: str | None = None) -> Sides:
+def infer_sides(
+    track: PlayTrack,
+    offense: str | None = None,
+    los_x: float | None = None,
+    attacks: str | None = None,
+) -> Sides:
     """Work out which team has the ball.
 
     Pass ``offense`` whenever play-by-play is at hand — a benchmark should never be
     guessing this. The inference exists for the case a coach's upload has no metadata
     at all.
+
+    ``los_x`` and ``attacks`` are the broadcast's answer, from
+    :meth:`gridiron_tracking.broadcast.MarkerCheck.situation`. They matter because the
+    two methods below both need something a broadcast clip often lacks: the centre
+    bent over the ball needs a ball track, and pre-snap stillness needs pre-snap
+    footage. A clip cut at the snap with no ball has neither, and before this path
+    existed that returned the first team alphabetically with zero confidence — which
+    a caller who ignored the confidence turned into 44 defenders.
+
+    Given the line of scrimmage and which way the offense is going, possession is
+    just geometry: at the snap the offense is behind the line and the defense is in
+    front of it.
     """
     teams = sorted({e.team for e in track.roster.values()})
     if offense is not None:
@@ -84,6 +101,26 @@ def infer_sides(track: PlayTrack, offense: str | None = None) -> Sides:
                      teams[1] if len(teams) > 1 else "unknown", "unknown", 0.0)
 
     snap = _snap_frame(track)
+
+    # --- the broadcast's own lines, if they were read --------------------------
+    if los_x is not None and attacks in ("left", "right") and snap is not None:
+        behind: dict[str, list[float]] = {t: [] for t in teams}
+        for pid, p in snap.players.items():
+            entry = track.roster.get(pid)
+            if entry and entry.team in behind:
+                # Signed distance from the line, positive downfield.
+                offset = (p.x - los_x) if attacks == "right" else (los_x - p.x)
+                behind[entry.team].append(offset)
+        means = {t: sum(v) / len(v) for t, v in behind.items() if v}
+        if len(means) == 2:
+            off = min(means, key=means.get)
+            other = next(t for t in teams if t != off)
+            # Both sides sitting on the same side of the line means the line, the
+            # snap frame or the direction is wrong, and a coin-flip dressed as a
+            # measurement is worse than no answer.
+            if means[off] < 0.0 < means[other]:
+                return Sides(off, other, "behind_the_los", 0.95)
+            return Sides(off, other, "behind_the_los_unseparated", 0.5)
 
     # --- the centre, if there is a ball to be bent over ------------------------
     if snap is not None and snap.ball is not None:

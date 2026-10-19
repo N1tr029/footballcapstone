@@ -7,16 +7,29 @@ that position claims to be. If that pixel lands on a player in the actual frame,
 coordinate is right. If it lands on grass, on a coach, or in the crowd, it is wrong —
 and you can see which, on which frame, for which player.
 
-That turns a vague "it looks off" into three numbers per frame:
+That turns a vague "it looks off" into four numbers per frame. The assignment behind
+them is *exclusive* — a box is one person, so one track may hold it — and that is the
+whole difference between a number that can grade this pipeline and one that cannot:
 
-**on_player** — the recovered position reprojects inside a detection box. The
-coordinate is consistent with what the detector saw.
+**on_player** — the recovered position reprojects inside a detection box that no other
+track holds. The coordinate is consistent with what the detector saw, and it accounts
+for exactly one person.
+
+**duplicate** — it reprojects onto a real person who is already held by another track.
+One man wearing two tracks, which is this pipeline's most common defect and the reason
+for the exclusivity: scored permissively, every duplicate reads as a second success, and
+the measurement gets better precisely as the tracking gets worse. The reference clip
+read 92.1% that way and reads 80.0% honestly; the entire 12-point gap was duplication.
 
 **stray** — it reprojects onto nothing. Either the tracker is coasting a player who is
 no longer there, or the position has drifted off the man it belongs to.
 
 **unclaimed** — a detection with no track on it. Somebody on the field is not being
 tracked.
+
+What none of them can see is *who* a box contains. An official working the play is a
+person, on the field, detected — so a track on him scores as cleanly as a track on a
+safety. Furniture has to be kept out upstream; this check will never report it.
 
 None of this proves the *field* coordinates are correct in yards; a wrong-but-
 self-consistent registration would still score well, which is why it sits alongside the
@@ -30,6 +43,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field as dc_field
 
 import numpy as np
+from scipy.optimize import linear_sum_assignment
 
 from .contract import PlayTrack
 
@@ -43,6 +57,7 @@ class FrameCheck:
     t: float
     frame_index: int
     on_player: int = 0
+    duplicate: int = 0
     stray: int = 0
     unclaimed: int = 0
     detections: int = 0
@@ -59,6 +74,7 @@ class PlayerCheck:
     player_id: str
     frames: int = 0
     on_player: int = 0
+    duplicate: int = 0
     mean_px: float = 0.0
 
     @property
@@ -86,8 +102,12 @@ class VerifyReport:
         lines = [
             "frame-by-frame agreement between the recreation and the clip",
             "",
-            f"  overall            {self.agreement * 100:.1f}% of tracked players land on a real person",
+            f"  overall            {self.agreement * 100:.1f}% of tracked players hold a person of their own",
             f"  frames checked     {len(self.frames)}",
+            f"  coverage           {np.mean([f.on_player for f in self.frames]):.1f} of 22"
+            f"   (people accounted for, one track each)",
+            f"  duplicate          {np.mean([f.duplicate for f in self.frames]):.1f}"
+            f"   (one person wearing two tracks)",
             f"  stray per frame    {np.mean([f.stray for f in self.frames]):.1f}"
             f"   (tracks sitting on nobody)",
             f"  unclaimed          {np.mean([f.unclaimed for f in self.frames]):.1f}"
@@ -97,11 +117,12 @@ class VerifyReport:
         ]
         for f in self.worst_frames():
             lines.append(f"    t {f.t:+.1f}s  frame {f.frame_index}: "
-                         f"{f.on_player}/{f.tracked} on a player, {f.stray} stray, {f.unclaimed} unclaimed")
+                         f"{f.on_player}/{f.tracked} on a player, {f.duplicate} duplicate, "
+                         f"{f.stray} stray, {f.unclaimed} unclaimed")
         lines += ["", "  worst players:"]
         for p in self.worst_players():
             lines.append(f"    {p.player_id:<10} {p.agreement * 100:5.1f}% over {p.frames} frames, "
-                         f"mean miss {p.mean_px:.0f} px")
+                         f"{p.duplicate} duplicate, mean miss {p.mean_px:.0f} px")
         return "\n".join(lines)
 
 
@@ -115,6 +136,84 @@ def _distance_to(px, box) -> float:
     dx = max(x1 - px[0], 0.0, px[0] - x2)
     dy = max(y1 - px[1], 0.0, px[1] - y2)
     return float(np.hypot(dx, dy))
+
+
+def _foot(box) -> tuple[float, float]:
+    """Where a box says its person is standing."""
+    x1, _, x2, y2 = box
+    return ((x1 + x2) / 2.0, y2)
+
+
+def assign(px, boxes, pad: float = 6.0):
+    """One box, one track. Returns ``(matched, duplicate, stray)`` by track index.
+
+    The reason this is not a loop over tracks each taking its nearest box: a box is
+    one person, so it can be claimed once. Two tracks inside one box is the most
+    common defect this pipeline has, and a scorer that lets both claim it reports two
+    successes where the truth is one success and one duplicate — which is how a frame
+    carrying four officials, a duplicate and two rings on bare grass scored 19 of 19.
+
+    So the assignment is exclusive, and what does not fit is *named* rather than
+    quietly absorbed:
+
+    ``matched``    track -> box, one to one. The only thing that counts as agreement.
+    ``duplicate``  the track is inside a box another track already holds. That is one
+                   person wearing two tracks — a defect of its own kind, never a hit.
+    ``stray``      the track is inside no box at all.
+
+    Containment is still the gate, exactly as before. The cost that breaks ties is the
+    distance to the box's *foot*, because every box inside which a point lies scores
+    zero on :func:`_distance_to` and the choice between them would otherwise be
+    whichever one the detector happened to emit first.
+    """
+    n, m = len(px), len(boxes)
+    matched: dict[int, int] = {}
+    duplicate: set[int] = set()
+    stray: set[int] = set()
+    if n == 0:
+        return matched, duplicate, stray
+
+    finite = [i for i in range(n) if np.isfinite(px[i]).all()]
+    stray.update(set(range(n)) - set(finite))
+    if not finite or m == 0:
+        stray.update(finite)
+        return matched, duplicate, stray
+
+    inside = np.zeros((len(finite), m), dtype=bool)
+    cost = np.full((len(finite), m), 1e6)
+    for r, i in enumerate(finite):
+        for c, b in enumerate(boxes):
+            if _inside(px[i], b, pad):
+                inside[r, c] = True
+                fx, fy = _foot(b)
+                cost[r, c] = float(np.hypot(px[i][0] - fx, px[i][1] - fy))
+
+    for r, c in zip(*linear_sum_assignment(cost)):
+        if inside[r, c]:
+            matched[finite[r]] = int(c)
+
+    for r, i in enumerate(finite):
+        if i in matched:
+            continue
+        (duplicate if inside[r].any() else stray).add(i)
+    return matched, duplicate, stray
+
+
+def _player_radius(to_image, player, fallback: int = 11) -> int:
+    """How wide a player is in pixels, at the place he is standing.
+
+    Taken from the geometry, not from whichever detector box the point fell into. A
+    box was the wrong source twice over: in a pile the boxes are wide and tangled, so
+    the ring swelled to two or three times a player's width exactly where the tracking
+    most needed auditing, and when several boxes overlapped the first one won by
+    accident. A shoulder span is about a yard anywhere on the field, so projecting one
+    yard at the player's own feet gives a ring that shrinks with distance the way it
+    should.
+    """
+    pts = np.atleast_2d(to_image([[player.x - 0.5, player.y], [player.x + 0.5, player.y]]))
+    if pts.shape[0] < 2 or not np.isfinite(pts).all():
+        return fallback
+    return int(np.clip(round(float(np.hypot(*(pts[1] - pts[0]))) / 2.0), 5, 60))
 
 
 def verify(
@@ -148,30 +247,25 @@ def verify(
                            else _to_image(registration, src - frame_offset, field_pts))
 
         fc = FrameCheck(t=f.t, frame_index=src, detections=len(boxes), tracked=len(ids))
-        claimed: set[int] = set()
+        matched, duplicate, stray = assign(px, boxes, pad)
 
-        for pid, p in zip(ids, px):
-            if not np.isfinite(p).all():
-                fc.stray += 1
-                continue
-            hit = None
-            best = np.inf
-            for bi, b in enumerate(boxes):
-                d = _distance_to(p, b)
-                if d < best:
-                    best, hit = d, bi
+        for i, pid in enumerate(ids):
             pc = rep.players.setdefault(pid, PlayerCheck(player_id=pid))
             pc.frames += 1
-            if hit is not None and _inside(p, boxes[hit], pad):
+            if i in matched:
                 fc.on_player += 1
                 pc.on_player += 1
-                claimed.add(hit)
+            elif i in duplicate:
+                fc.duplicate += 1
+                pc.duplicate += 1
             else:
                 fc.stray += 1
-                pc.mean_px += best
-                fc.worst_px = max(fc.worst_px, best)
+                miss = min((_distance_to(px[i], b) for b in boxes), default=0.0) \
+                    if np.isfinite(px[i]).all() else 0.0
+                pc.mean_px += miss
+                fc.worst_px = max(fc.worst_px, miss)
 
-        fc.unclaimed = len(boxes) - len(claimed)
+        fc.unclaimed = len(boxes) - len(matched)
         rep.frames.append(fc)
 
     for pc in rep.players.values():
@@ -292,27 +386,34 @@ def side_by_side(
             if h is not None and f.players:
                 ids = list(f.players)
                 px = np.atleast_2d(h.to_image([[f.players[i].x, f.players[i].y] for i in ids]))
-                for pid, p in zip(ids, px):
+                # The same assignment the scorer uses. Drawing it a second way is how a
+                # picture ends up disagreeing with the number printed under it.
+                matched, duplicate, stray = assign(px, boxes, pad)
+                dupes = len(duplicate)
+                for i, (pid, p) in enumerate(zip(ids, px)):
                     if not np.isfinite(p).all():
                         continue
                     team = track.roster[pid].team if pid in track.roster else "other"
                     c = COL.get(team, (150, 150, 150))
-                    hit = any(_inside(p, b, pad) for b in boxes)
+                    hit = i in matched
                     on, off = on + int(hit), off + int(not hit)
                     # A ring on the ground the player is standing on, not a dot floating
                     # at his feet. The position being drawn *is* the ground point, and a
                     # flat ellipse says so — a filled circle there reads as a mislaid
                     # marker even when it is exactly right, which cost an hour of looking
                     # for a vertical bias that was not there (measured: 0.1 px).
-                    rx = 11
-                    for b in boxes:
-                        if _inside(p, b, pad):
-                            rx = max(7, int((b[2] - b[0]) * 0.55))
-                            break
+                    rx = _player_radius(h.to_image, f.players[pid])
                     ctr = tuple(p.astype(int))
                     if hit:
                         cv2.ellipse(left, ctr, (rx, max(3, rx // 3)), 0, 0, 360, c, 2, cv2.LINE_AA)
                         cv2.circle(left, ctr, 3, c, -1, cv2.LINE_AA)
+                    elif i in duplicate:
+                        # On a real person, but one already held by another track. Drawn
+                        # in the team colour so it is findable, crossed in magenta so it
+                        # is never mistaken for a player who is genuinely there.
+                        cv2.ellipse(left, ctr, (rx, max(3, rx // 3)), 0, 0, 360, c, 1, cv2.LINE_AA)
+                        cv2.line(left, (ctr[0] - rx, ctr[1]), (ctr[0] + rx, ctr[1]),
+                                 (255, 0, 255), 2, cv2.LINE_AA)
                     else:
                         cv2.ellipse(left, ctr, (rx, max(3, rx // 3)), 0, 0, 360,
                                     (0, 0, 255), 2, cv2.LINE_AA)
@@ -320,8 +421,10 @@ def side_by_side(
                                  (0, 0, 255), 2, cv2.LINE_AA)
             label(left, [
                 "THE CLIP, with the recreation drawn back onto it",
-                "team ring = lands on a detected player    red cross = lands on nobody",
-                f"{on} of {on + off} agree" + (f"   t {f.t:+.1f}s" if True else ""),
+                "team ring = holds a player of its own    magenta bar = a second track on "
+                "somebody already held    red cross = lands on nobody",
+                f"{on} of {on + off} players held, {dupes} duplicate"
+                + f"   t {f.t:+.1f}s",
             ])
 
             right = board.copy()

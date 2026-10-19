@@ -68,6 +68,52 @@ class MarkerCheck:
         # Half a yard is the resolution of the source, not a tolerance chosen to pass.
         return abs(self.error_yards) <= 0.5 and self.straightness <= 0.5
 
+    # The two lines say more than the scale they were extracted to check. The
+    # broadcaster draws them through a surveyed field, and the first-down line is
+    # always downfield of the line of scrimmage — so between them they carry the
+    # yardline, the distance, and which way the offense is going. For a clip with
+    # no pre-snap footage and no ball track, that is the only automatic answer to
+    # "which way is downfield", and everything else about the play depends on it.
+
+    @property
+    def line_of_scrimmage(self) -> float:
+        """Field x of the blue line, in yards. NaN if it was never both found."""
+        return (float(np.median([a for _, a, _ in self.samples]))
+                if self.samples else float("nan"))
+
+    @property
+    def first_down_line(self) -> float:
+        return (float(np.median([b for _, _, b in self.samples]))
+                if self.samples else float("nan"))
+
+    @property
+    def attacks(self) -> str | None:
+        """``"right"`` if the offense is going toward +x, ``"left"`` if toward 0.
+
+        Named for the contract's convention rather than the screen's: the answer is
+        about field coordinates, not about which way anybody is facing on television.
+        """
+        if not self.samples:
+            return None
+        gap = self.first_down_line - self.line_of_scrimmage
+        if not np.isfinite(gap) or abs(gap) < 0.5:
+            return None
+        return "right" if gap > 0 else "left"
+
+    def situation(self) -> dict:
+        """The play-level facts the two lines establish, for a track's meta."""
+        return {
+            "lineOfScrimmage": round(self.line_of_scrimmage, 2) if self.samples else None,
+            "firstDownLine": round(self.first_down_line, 2) if self.samples else None,
+            "yardsToGo": self.stated_yards,
+            "attacks": self.attacks,
+            "source": "the broadcaster's own virtual lines, read through the "
+                      "registration; the distance is the officials' spot rounded "
+                      "to a whole yard",
+            "measured_gap_yards": round(self.measured, 2) if self.samples else None,
+            "frames": len(self.samples),
+        }
+
     def table(self) -> str:
         n = len(self.samples)
         if not n:

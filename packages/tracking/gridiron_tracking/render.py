@@ -84,7 +84,9 @@ class RenderResult:
                          f"   (1.0 is one track per player)")
         if self.report is not None:
             r = self.report
-            lines.append(f"  agreement         {r.agreement * 100:.1f}% of tracked players land on a real person")
+            lines.append(f"  agreement         {r.agreement * 100:.1f}% of tracked players hold a person of their own")
+            lines.append(f"  coverage          {np.mean([f.on_player for f in r.frames]):.1f} of 22 accounted for")
+            lines.append(f"  duplicate / frame {np.mean([f.duplicate for f in r.frames]):.1f}")
             lines.append(f"  stray / frame     {np.mean([f.stray for f in r.frames]):.1f}")
             lines.append(f"  unclaimed / frame {np.mean([f.unclaimed for f in r.frames]):.1f}")
         if self.team_separation:

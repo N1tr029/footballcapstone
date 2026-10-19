@@ -132,6 +132,34 @@ python -m pytest
 Both Python packages, from a bare checkout — `pytest.ini` puts them on the path, so
 nothing needs installing first. Each also runs on its own.
 
+### Watch a game, and what the model would have done instead
+
+```bash
+python -m gridiron_counterfactual whatif --worst 5
+```
+
+Reviews the passes in the game the Unity app ships, ranks them by how much more
+separated the model thinks the best alternative receiver was, and writes each
+forecast as a second play immediately after the one it argues with. Then open the
+Unity project, **Hindsight > Setup Scene**, press Play: load a real play, watch it,
+press `N` for the alternative. `C` cycles top-down / broadcast / player view, `V`
+rides the next player.
+
+`--no-write` prints the reviews without touching the app. Named plays work too:
+`whatif 2022090800_2908`.
+
+### Watch a clip you tracked from video
+
+```bash
+python -m gridiron_tracking render nw_michigan      # video -> tracking (already done)
+python -m gridiron_tracking unity nw_michigan       # tracking -> the Unity app
+```
+
+The clip appears in the navigator beside the measured plays, which is the comparison
+worth having in front of anyone judging this. **Read `data/runs/<clip>/report.txt`
+first** — 80% of tracks hold a player of their own on that clip, and a smooth replay
+of a bad track is exactly as convincing as a smooth replay of a good one.
+
 ## Prototype
 
 [`packages/replay-engine/prototype`](packages/replay-engine/prototype) — the Philly

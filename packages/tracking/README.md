@@ -159,3 +159,44 @@ rather than asking you to trust it.
 high school 17.78. Register a high-school field against NFL hashes and every player
 lands six yards sideways, with a clean-looking reprojection error, because the
 homography absorbs the mistake.
+
+## The ball, and why it is the one thing still blocking the chain
+
+Everything the play model needs from a clip is now derived automatically — a roster
+of twenty-two, which side has the ball, which way it is going, the line of
+scrimmage — except the throw and the arrival, and those need the ball.
+
+The ball stage uses the generic COCO "sports ball" class. It cannot find a football
+in this footage, and the way it fails is worth recording because both failures look
+like success from a detection rate.
+
+**Un-tiled** (`imgsz 1280`, conf 0.10): 3 detections in 65 frames. 5%.
+
+**Tiled** (full frame plus 3x3 overlapping crops at 1536, conf 0.05 — the same trick
+`detect/yolo.py` uses for far-hash players): 27 detections, 42%. Nine times better,
+and every one of them the **down-and-distance graphic**. It is rendered onto the
+field near the line of scrimmage, it is about the right shape, and it is in every
+frame. The resulting "ball" travelled 2.4 yards in 2.6 seconds.
+
+**Tiled, with static candidates rejected** (any cluster of candidates holding one
+field position across a large part of the play is furniture): 1146 candidates
+dropped at three fixed spots, leaving 12 detections, 18%. The track now travels 23
+yards — but at 2 to 11 yards a second in a smooth drift, which are human speeds. With
+the graphics gone the detector finds a player instead.
+
+So: static clutter, then a person. Never the ball. COCO class 32 was trained on
+basketballs, tennis balls and footballs of the other kind, and a brown spheroid that
+is nine pixels across and in someone's hands most of the play is out of its
+distribution.
+
+**What would clear it.** A detector fine-tuned on footballs — a few hundred labelled
+frames across these eight clips, which is an afternoon of labelling and an hour of
+training. Nothing else in the chain is waiting on research; this is the one piece.
+
+**What the pipeline does meanwhile**, and the part worth keeping whatever replaces
+the detector: it refuses, three times over and for three different reasons.
+`_merge_ball` records `travelled_yards`, so a static track is visible in the file;
+`prepare` blocks a ball that covers under ten yards in a play *and* one detected on
+under a quarter of samples; and `events.derive` will not call anything a throw that
+does not clear 13 yards a second for a third of a second over six yards. The second
+of those caught the graphic before anybody looked at a picture.

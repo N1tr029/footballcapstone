@@ -12,7 +12,7 @@ import subprocess
 
 import pytest
 
-from conftest import CONTRACT_JS
+from tracking_support import CONTRACT_JS
 from gridiron_tracking.contract import (
     Ball, PlayTrack, PlayerFrame, RosterEntry, TrackingFrame, validate,
 )

@@ -35,6 +35,9 @@ from . import roster as rostermod
 from . import sides as sidesmod
 from .contract import PlayTrack
 
+MIN_BALL_TRAVEL = 10.0
+"""Yards a real ball covers in a play, at the very least."""
+
 MIN_BALL_MEASURED = 0.25
 """How much of the ball track has to be a real detection rather than a coast.
 
@@ -56,6 +59,9 @@ class PrepareReport:
     ball_measured: float = 0.0
     """Fraction of ball samples that were actually detected rather than coasted."""
     ball_coverage: float = 0.0
+    ball_travelled: float = 0.0
+    """Yards between the extremes of the ball track. A ball that never moved is
+    not a ball, however often it was detected."""
     reviewable: bool = False
     blockers: list[str] = dc_field(default_factory=list)
     notes: list[str] = dc_field(default_factory=list)
@@ -75,8 +81,8 @@ class PrepareReport:
         lines.append(
             f"  ball track        " + (
                 "ABSENT" if not self.has_ball else
-                f"{self.ball_coverage:.0%} of frames, {self.ball_measured:.0%} of it "
-                f"actually seen"
+                f"{self.ball_coverage:.0%} of frames, {self.ball_measured:.0%} seen, "
+                f"travelled {self.ball_travelled:.1f} yd"
             )
         )
         lines.append("")
@@ -97,6 +103,7 @@ class PrepareReport:
             "has_ball": self.has_ball,
             "ball_measured": round(self.ball_measured, 3),
             "ball_coverage": round(self.ball_coverage, 3),
+            "ball_travelled": round(self.ball_travelled, 2),
             "reviewable": self.reviewable,
             "blockers": list(self.blockers),
             "notes": list(self.notes),
@@ -201,12 +208,23 @@ def prepare(track: PlayTrack, offense: str | None = None) -> tuple[PlayTrack, Pr
     stats = out.meta.get("ball") or {}
     report.ball_measured = float(stats.get("measured_fraction") or 0.0)
     report.ball_coverage = positioned / len(out.frames) if out.frames else 0.0
+    report.ball_travelled = float(stats.get("travelled_yards") or 0.0)
 
     if not report.has_ball:
         report.blockers.append(
             "no ball track, so there is no passer, no targeted receiver, no throw "
             "and no arrival. The review has nothing to key a forecast on. Set "
             "track.ball = true in the clip spec."
+        )
+    elif report.ball_travelled < MIN_BALL_TRAVEL:
+        report.blockers.append(
+            f"the ball track covers {report.ball_travelled:.1f} yards over the whole "
+            f"play, which nothing thrown or carried does. It is a track of something "
+            f"that does not move — on a televised game, the down-and-distance "
+            f"graphic sits on the field near the line of scrimmage and the generic "
+            f"sports-ball class finds it readily. A detection rate "
+            f"({report.ball_measured:.0%} here) says how often something was found "
+            f"and nothing about what."
         )
     elif report.ball_measured < MIN_BALL_MEASURED:
         report.blockers.append(

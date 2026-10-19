@@ -454,6 +454,11 @@ def _ball_boxes(model, image, spec: ClipSpec):
     return out
 
 
+MIN_BALL_TRAVEL = 10.0
+"""Yards a real ball covers in a play, at the very least. Below this the track is
+of something that does not move, which on a televised game means a graphic."""
+
+
 def _merge_ball(track: PlayTrack, ball, log) -> None:
     """Put the tracked ball on the frames, and say how much of it was seen.
 
@@ -480,19 +485,36 @@ def _merge_ball(track: PlayTrack, ball, log) -> None:
 
     measured = counts.get("detected", 0)
     total = len(ball.samples) or 1
+
+    # How far it actually went. A detection rate says how often something was found
+    # and nothing at all about whether that something was a football: on the
+    # reference clip, tiling raised the rate from 5% to 42% by finding the
+    # down-and-distance graphic, which sits on the field near the line of scrimmage
+    # and never moves. A ball that travels two yards in a whole play is furniture.
+    positions = [(f.t, f.ball.x, f.ball.y) for f in track.frames if f.ball is not None]
+    span = 0.0
+    if len(positions) >= 2:
+        xs = [p[1] for p in positions]
+        ys = [p[2] for p in positions]
+        span = float(np.hypot(max(xs) - min(xs), max(ys) - min(ys)))
+
     track.meta["ball"] = {
         "frames_with_a_position": written,
         "frames_total": len(track.frames),
         "by_source": counts,
         "measured_fraction": round(measured / total, 3),
+        "travelled_yards": round(span, 2),
         "note": (
             "A football in a wide broadcast shot is a few pixels and is behind "
-            "somebody most of the play. Read measured_fraction before trusting "
-            "any possession, passer or throw derived from this."
+            "somebody most of the play. Read measured_fraction AND travelled_yards "
+            "before trusting any possession, passer or throw derived from this: a "
+            "high detection rate on a static object is a confident wrong answer, "
+            "and the generic sports-ball class finds broadcast graphics."
         ),
     }
     log(f"    ball merged onto {written}/{len(track.frames)} frames "
-        f"({100 * measured / total:.0f}% actually seen)")
+        f"({100 * measured / total:.0f}% seen, travelled {span:.1f} yd"
+        f"{' — STATIC, this is not a ball' if span < MIN_BALL_TRAVEL else ''})")
 
 
 def _ball(spec: ClipSpec, track: PlayTrack, frames, reg, fps, offset: int, log):

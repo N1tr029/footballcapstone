@@ -41,7 +41,8 @@ def clip(attacks="left", los=47.0, with_ball=False, n_frames=12, extra_kit=False
         ))
     meta = {
         "source": "vision", "rate": 10,
-        **({"ball": {"measured_fraction": ball_measured}} if with_ball else {}),
+        **({"ball": {"measured_fraction": ball_measured,
+                      "travelled_yards": 30.0}} if with_ball else {}),
         "broadcast": {
             "lineOfScrimmage": los,
             "firstDownLine": los - sign * togo,
@@ -172,3 +173,26 @@ def test_a_caller_who_knows_the_offense_is_believed():
     assert report.sides.offense == "teamB"
     assert report.sides.method == "caller"
     assert report.sides.confidence == 1.0
+
+
+def test_a_ball_that_never_moves_is_not_a_ball():
+    """The reference clip's actual failure, and the reason a detection rate is not
+    a quality measure. Tiling took the rate from 5% to 42% by finding the
+    down-and-distance graphic: it sits on the field near the line of scrimmage, it
+    is roughly ball-shaped, and it never moves."""
+    track = clip(with_ball=True, ball_measured=0.42)
+    track.meta["ball"]["travelled_yards"] = 2.4
+
+    out, report = prepare.prepare(track)
+
+    assert report.ball_measured == 0.42      # a confident detection rate
+    assert not report.reviewable             # and a worthless track
+    assert any("does not move" in b for b in report.blockers)
+    assert any("graphic" in b for b in report.blockers)
+
+
+def test_a_ball_that_travels_passes():
+    track = clip(with_ball=True, ball_measured=0.42)
+    track.meta["ball"]["travelled_yards"] = 34.0
+    out, report = prepare.prepare(track)
+    assert report.reviewable, report.blockers

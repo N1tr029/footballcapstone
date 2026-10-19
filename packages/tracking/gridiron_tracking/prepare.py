@@ -35,6 +35,13 @@ from . import roster as rostermod
 from . import sides as sidesmod
 from .contract import PlayTrack
 
+MIN_BALL_MEASURED = 0.25
+"""How much of the ball track has to be a real detection rather than a coast.
+
+Not tuned — there is one clip to tune on and it scores 5%, which is not near any
+threshold. It is set where a reasonable person would stop believing a derived throw
+instant, and it should be revisited the first time a detector clears it."""
+
 
 @dataclass
 class PrepareReport:
@@ -43,6 +50,9 @@ class PrepareReport:
     mirrored: bool = False
     line_of_scrimmage: float | None = None
     has_ball: bool = False
+    ball_measured: float = 0.0
+    """Fraction of ball samples that were actually detected rather than coasted."""
+    ball_coverage: float = 0.0
     reviewable: bool = False
     blockers: list[str] = dc_field(default_factory=list)
 
@@ -56,7 +66,13 @@ class PrepareReport:
         if self.line_of_scrimmage is not None:
             lines.append(f"  line of scrimmage x = {self.line_of_scrimmage:.1f} yd")
         lines.append(f"  orientation       {'mirrored so the offense attacks +x' if self.mirrored else 'already attacking +x'}")
-        lines.append(f"  ball track        {'present' if self.has_ball else 'ABSENT'}")
+        lines.append(
+            f"  ball track        " + (
+                "ABSENT" if not self.has_ball else
+                f"{self.ball_coverage:.0%} of frames, {self.ball_measured:.0%} of it "
+                f"actually seen"
+            )
+        )
         lines.append("")
         lines.append(f"  reviewable        {'yes' if self.reviewable else 'NO'}")
         for b in self.blockers:
@@ -70,6 +86,8 @@ class PrepareReport:
             "mirrored": self.mirrored,
             "line_of_scrimmage": self.line_of_scrimmage,
             "has_ball": self.has_ball,
+            "ball_measured": round(self.ball_measured, 3),
+            "ball_coverage": round(self.ball_coverage, 3),
             "reviewable": self.reviewable,
             "blockers": list(self.blockers),
         }
@@ -141,12 +159,32 @@ def prepare(track: PlayTrack, offense: str | None = None) -> tuple[PlayTrack, Pr
         )
 
     # --- the ball -------------------------------------------------------------
-    report.has_ball = any(f.ball is not None for f in out.frames)
+    # Presence is not the test. A ball on a handful of frames is worse than no ball:
+    # every derivation downstream will run, return a number, and be wrong, where an
+    # absent ball at least stops the chain. The passer is read at the throw and the
+    # targeted receiver at the arrival, so what matters is whether the ball was
+    # actually SEEN often enough to locate those two instants.
+    positioned = sum(1 for f in out.frames if f.ball is not None)
+    report.has_ball = positioned > 0
+    stats = out.meta.get("ball") or {}
+    report.ball_measured = float(stats.get("measured_fraction") or 0.0)
+    report.ball_coverage = positioned / len(out.frames) if out.frames else 0.0
+
     if not report.has_ball:
         report.blockers.append(
             "no ball track, so there is no passer, no targeted receiver, no throw "
             "and no arrival. The review has nothing to key a forecast on. Set "
             "track.ball = true in the clip spec."
+        )
+    elif report.ball_measured < MIN_BALL_MEASURED:
+        report.blockers.append(
+            f"the ball was actually seen on {report.ball_measured:.0%} of samples "
+            f"({report.ball_coverage:.0%} of frames carry a position, the rest "
+            f"coasted). Below {MIN_BALL_MEASURED:.0%} the throw and the arrival "
+            f"cannot be located, and a review built on that would be confident and "
+            f"meaningless. A football in a wide broadcast shot is a few pixels and "
+            f"is behind somebody most of the play; the generic sports-ball class "
+            f"was not trained on one."
         )
 
     report.reviewable = not report.blockers

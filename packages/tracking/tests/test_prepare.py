@@ -14,7 +14,7 @@ from gridiron_tracking.contract import (
 
 
 def clip(attacks="left", los=47.0, with_ball=False, n_frames=12, extra_kit=False,
-         togo=6):
+         togo=6, ball_measured=0.9):
     """A vision-shaped track: anonymous ids, kit labels, offense behind the line."""
     sign = 1.0 if attacks == "right" else -1.0
     roster, base = {}, {}
@@ -41,6 +41,7 @@ def clip(attacks="left", los=47.0, with_ball=False, n_frames=12, extra_kit=False
         ))
     meta = {
         "source": "vision", "rate": 10,
+        **({"ball": {"measured_fraction": ball_measured}} if with_ball else {}),
         "broadcast": {
             "lineOfScrimmage": los,
             "firstDownLine": los - sign * togo,
@@ -96,6 +97,16 @@ def test_a_missing_ball_is_named_as_the_blocker_it_is():
     assert report.has_ball is False
     assert any("no ball track" in b for b in report.blockers)
     assert any("track.ball = true" in b for b in report.blockers)
+
+
+def test_a_sparse_ball_is_a_blocker_not_a_pass():
+    """Presence is not the test. A ball on a handful of frames is worse than none:
+    every derivation downstream runs, returns a number, and is wrong."""
+    out, report = prepare.prepare(clip(with_ball=True, ball_measured=0.05))
+
+    assert report.has_ball is True
+    assert not report.reviewable
+    assert any("actually seen on 5%" in b for b in report.blockers)
 
 
 def test_a_clip_with_everything_is_reviewable():

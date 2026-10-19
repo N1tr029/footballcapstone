@@ -10,3 +10,8 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[3]
 CONTRACT_JS = REPO / "packages/replay-engine/prototype/engine/contract.js"
+
+# The Unity app's real play files, merged in from hindsight-frontend. The suite
+# that uses them skips when the subtree is absent, so a checkout without it still
+# runs green rather than erroring.
+HINDSIGHT_PLAYS = REPO / "packages/replay-engine/hindsight/Assets/StreamingAssets/plays"

@@ -216,6 +216,16 @@ class ClipSpec:
     start: int = 0
     stop: int | None = None
     step: int = 1
+    """Decimation. **Only 1 works** — the renderer refuses anything else, in a
+    second rather than after the detector has run.
+
+    It is kept at 1 rather than removed because everything downstream turns a
+    contract time into a source frame with ``t * fps + snap``, which is only a
+    frame index when every frame in the window was decoded. The temptation is a 60
+    fps clip, where decoding every other frame would halve the detection time for
+    output that is resampled to 10 Hz anyway; doing that properly means carrying
+    the decimation through the registration and the verifier, which is a real
+    change and not a spec field."""
     snap_frame: int | None = None
     fps: float | None = None
     out_fps: int = 12

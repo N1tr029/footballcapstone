@@ -3,7 +3,7 @@
   "video": "data/clips/Milton_Touchdown_Pass_to_Davis.webm",
   "start": 149,
   "stop": 521,
-  "step": 2,
+  "step": 1,
   "snap_frame": 221,
   "fps": null,
   "out_fps": 12,
@@ -31,9 +31,10 @@
     "min_inliers": 25,
     "horizon_frac": 0.35,
     "candidate_frames": [
-      145,
-      195,
-      245
+      175,
+      221,
+      300,
+      400
     ]
   },
   "track": {

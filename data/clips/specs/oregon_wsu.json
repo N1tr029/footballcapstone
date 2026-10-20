@@ -3,7 +3,7 @@
   "video": "data/clips/Oregon_vs._Washington_St_-_FOX_COLLEGE_FOOTBALL_HIGHLIGHTS.webm",
   "start": 135,
   "stop": 507,
-  "step": 2,
+  "step": 1,
   "snap_frame": 207,
   "fps": null,
   "out_fps": 12,
@@ -31,9 +31,10 @@
     "min_inliers": 25,
     "horizon_frac": 0.35,
     "candidate_frames": [
-      325,
-      375,
-      425
+      165,
+      207,
+      280,
+      400
     ]
   },
   "track": {

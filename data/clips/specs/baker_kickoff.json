@@ -23,7 +23,7 @@
   "register": {
     "mode": "auto",
     "frame": null,
-    "level": null,
+    "level": "high_school",
     "homography": null,
     "model": "gemini-flash-lite-latest",
     "propagate": true,

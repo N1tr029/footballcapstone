@@ -22,6 +22,11 @@ data/**
 !data/clips/specs/
 !data/clips/specs/*.json
 
+# ...and the field calibrator, for the same reason: it is the tool a clip gets
+# registered with when the vision model cannot do it, not an artifact. The frames
+# it loads are data and stay ignored — `calframe <clip>` writes a fresh one.
+!data/calibrate.html
+
 # Environment
 .env
 .env.local

@@ -1,0 +1,283 @@
+<title>Field Calibrator</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Barlow:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+  :root{
+    --ground:#F4F2ED;--panel:#FBFAF7;--edge:#DAD7D0;--text:#1B2026;
+    --dim:#5C666C;--fade:#8A9399;--accent:#B86A11;--good:#2C7A4B;--warn:#B4472A;
+    --ui:"Barlow",-apple-system,BlinkMacSystemFont,sans-serif;
+    --cond:"Barlow Condensed","Barlow",Impact,sans-serif;
+    --mono:"IBM Plex Mono",ui-monospace,Menlo,monospace;
+  }
+  @media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+    --ground:#0E1116;--panel:#151B22;--edge:#222C34;--text:#E4E7E9;
+    --dim:#8B979E;--fade:#5D686E;--accent:#F2A93B;--good:#5FBE86;--warn:#E8734A;}}
+  :root[data-theme="dark"]{--ground:#0E1116;--panel:#151B22;--edge:#222C34;--text:#E4E7E9;
+    --dim:#8B979E;--fade:#5D686E;--accent:#F2A93B;--good:#5FBE86;--warn:#E8734A;}
+
+  body{background:var(--ground);color:var(--text);font-family:var(--ui);font-size:15px;
+       line-height:1.5;padding-block:26px;padding-left:18px;padding-right:18px}
+  .wrap{max-width:1200px;margin:0 auto;display:flex;flex-direction:column;gap:16px}
+  h1{font-family:var(--cond);font-weight:700;font-size:33px;margin:0}
+  .lede{color:var(--dim);max-width:74ch;margin:0}
+  .lede b{color:var(--text);font-weight:600}
+
+  .bar{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+  button{font-family:var(--cond);font-size:14px;font-weight:600;text-transform:uppercase;
+    letter-spacing:.07em;background:transparent;color:var(--text);border:1px solid var(--fade);
+    border-radius:2px;padding:7px 13px;cursor:pointer}
+  button:hover{border-color:var(--accent);color:var(--accent)}
+  button.on{background:var(--accent);border-color:var(--accent);color:var(--ground)}
+  button:focus-visible,select:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+  select{font-family:var(--ui);font-size:13px;background:var(--ground);color:var(--text);
+    border:1px solid var(--edge);border-radius:2px;padding:4px 6px;max-width:100%}
+
+  .stage{position:relative;background:var(--panel);border:1px solid var(--edge);
+         border-radius:3px;overflow:hidden;line-height:0}
+  canvas#cv{display:block;width:100%;height:auto;cursor:crosshair}
+  .zoom{position:absolute;width:170px;height:170px;border:2px solid var(--accent);
+        border-radius:50%;pointer-events:none;overflow:hidden;display:none;background:var(--ground)}
+
+  .cols{display:grid;grid-template-columns:1fr 372px;gap:18px;align-items:start}
+  @media (max-width:900px){.cols{grid-template-columns:1fr}}
+  .card{background:var(--panel);border:1px solid var(--edge);border-radius:3px;padding:14px}
+  .card h2{font-family:var(--cond);font-size:13px;text-transform:uppercase;letter-spacing:.1em;
+           color:var(--fade);margin:0 0 10px;font-weight:600}
+
+  .pt{border-left:3px solid var(--warn);background:color-mix(in srgb,var(--warn) 6%,transparent);
+      padding:9px 10px;margin-bottom:8px;display:flex;flex-direction:column;gap:6px}
+  .pt.set{border-left-color:var(--good);background:color-mix(in srgb,var(--good) 6%,transparent)}
+  .pt .hd{display:flex;justify-content:space-between;align-items:center;
+          font-family:var(--mono);font-size:11.5px;color:var(--dim)}
+  .pt .hd b{font-family:var(--cond);font-size:15px;color:var(--text)}
+  .pt .hd button{padding:1px 6px;font-size:11px;border:0;color:var(--warn)}
+  .pt select{width:100%}
+
+  .stat{display:flex;justify-content:space-between;font-family:var(--mono);font-size:13px;
+        padding:5px 0;border-bottom:1px solid var(--edge)}
+  .ok{color:var(--good)}.bad{color:var(--warn)}
+  .msg{font-size:13.5px;color:var(--warn);margin:8px 0 0}
+  .msg.ok{color:var(--good)}
+  textarea{width:100%;min-height:104px;font-family:var(--mono);font-size:11px;
+    background:var(--ground);color:var(--text);border:1px solid var(--edge);
+    border-radius:2px;padding:9px;resize:vertical}
+  .hint{font-size:13.5px;color:var(--dim);margin:0}
+  .hint b{color:var(--text);font-weight:600}
+  .empty{color:var(--fade);font-size:13px}
+</style>
+
+<div class="wrap">
+  <h1>Field Calibrator</h1>
+  <p class="lede"><b>Click any point on the frame</b> whose place on the field you can name, then say
+    what it is in the panel. Four is the minimum. Use <b>two different yard lines</b> and hit each at
+    <b>two different distances across</b> — four points along one line is the one arrangement that
+    cannot work, and the panel will tell you if you get there.</p>
+
+  <div class="bar">
+    <button type="button" class="clip" data-img="cal_ucf.jpg">College · UCF</button>
+    <button type="button" class="clip on" data-img="cal_nfl.jpg">NFL · Bills at Bears</button>
+    <button type="button" class="clip" data-img="cal_hs.jpg">High school · kickoff</button>
+    <!-- Written by `python -m gridiron_tracking calframe <clip>`; the images are
+         data and are not in the repository, so a button is blank until you run it. -->
+    <button type="button" class="clip" data-img="cal_oregon_wsu.jpg">oregon_wsu</button>
+    <button type="button" class="clip" data-img="cal_milton_td.jpg">milton_td</button>
+    <button type="button" class="clip" data-img="cal_devin_td.jpg">devin_td</button>
+    <span style="flex:1"></span>
+    <button type="button" id="undo">Undo last</button>
+    <button type="button" id="clear">Clear all</button>
+  </div>
+
+  <div class="cols">
+    <div>
+      <div class="stage">
+        <canvas id="cv"></canvas>
+        <div class="zoom" id="zoom"><canvas id="zcv" width="170" height="170"></canvas></div>
+      </div>
+      <p class="hint" style="margin-top:9px">The magnifier follows your cursor so you can land on the
+        actual paint. Once four points are labelled, a <b>green field model</b> is drawn over the
+        frame — if its lines sit on the real yard lines, the calibration is right.</p>
+    </div>
+
+    <div style="display:flex;flex-direction:column;gap:14px">
+      <div class="card">
+        <h2>Your points</h2>
+        <div id="list"><p class="empty">Click the image to place one.</p></div>
+      </div>
+      <div class="card">
+        <h2>Fit</h2>
+        <div id="stats"><p class="empty">Nothing placed yet.</p></div>
+        <p class="msg" id="msg"></p>
+      </div>
+      <div class="card">
+        <h2>Send this back</h2>
+        <textarea id="out" readonly spellcheck="false"></textarea>
+        <button type="button" id="copy" style="margin-top:8px;width:100%">Copy</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+/* Field model: x runs 0-120 downfield (goal lines at 10 and 110), y runs 0-53.3
+   across. A painted "30" exists twice, which is why the halves are listed apart. */
+const LINES=[["— which yard line? —",null],["back of end zone (left)",0],["goal line (left)",10]];
+for(let n=5;n<=45;n+=5) LINES.push([n+" yard line (left half)",10+n]);
+LINES.push(["50 yard line",60]);
+for(let n=45;n>=5;n-=5) LINES.push([n+" yard line (right half)",110-n]);
+LINES.push(["goal line (right)",110],["back of end zone (right)",120]);
+
+const LANES=[["— how far across? —",null],
+  ["far sideline (across the field)",53.3],
+  ["far hash — NFL",29.72],["far hash — college",33.3],["far hash — high school",35.52],
+  ["near hash — NFL",23.58],["near hash — college",20],["near hash — high school",17.78],
+  ["near sideline (closest to camera)",0]];
+
+const cv=document.getElementById('cv'),ctx=cv.getContext('2d');
+const zoom=document.getElementById('zoom'),zctx=document.getElementById('zcv').getContext('2d');
+let img=new Image(),natW=1280,natH=720,pts=[],H=null;
+
+/* --- homography from >=4 correspondences, least squares on the normal equations --- */
+function solveLin(A,b){const n=b.length,M=A.map((r,i)=>r.concat([b[i]]));
+  for(let c=0;c<n;c++){let p=c;for(let r=c+1;r<n;r++)if(Math.abs(M[r][c])>Math.abs(M[p][c]))p=r;
+    if(Math.abs(M[p][c])<1e-12)return null;[M[c],M[p]]=[M[p],M[c]];
+    for(let r=0;r<n;r++)if(r!==c){const f=M[r][c]/M[c][c];for(let k=c;k<=n;k++)M[r][k]-=f*M[c][k];}}
+  return M.map((r,i)=>r[n]/r[i]);}
+function fitH(src,dst){if(src.length<4)return null;
+  const rows=[],rhs=[];
+  src.forEach((s,i)=>{const d=dst[i];
+    rows.push([s[0],s[1],1,0,0,0,-s[0]*d[0],-s[1]*d[0]]);rhs.push(d[0]);
+    rows.push([0,0,0,s[0],s[1],1,-s[0]*d[1],-s[1]*d[1]]);rhs.push(d[1]);});
+  const AtA=Array.from({length:8},()=>new Array(8).fill(0)),Atb=new Array(8).fill(0);
+  rows.forEach((r,i)=>{for(let a=0;a<8;a++){for(let c=0;c<8;c++)AtA[a][c]+=r[a]*r[c];Atb[a]+=r[a]*rhs[i];}});
+  const h=solveLin(AtA,Atb);
+  return h&&h.every(Number.isFinite)?[[h[0],h[1],h[2]],[h[3],h[4],h[5]],[h[6],h[7],1]]:null;}
+function apply(H,p){const w=H[2][0]*p[0]+H[2][1]*p[1]+H[2][2];
+  if(Math.abs(w)<1e-9)return null;
+  const q=[(H[0][0]*p[0]+H[0][1]*p[1]+H[0][2])/w,(H[1][0]*p[0]+H[1][1]*p[1]+H[1][2])/w];
+  return (Number.isFinite(q[0])&&Number.isFinite(q[1]))?q:null;}
+
+const labelled=()=>pts.filter(p=>p.x!==null&&p.y!==null);
+
+function draw(){
+  ctx.clearRect(0,0,cv.width,cv.height);
+  if(img.complete&&img.naturalWidth)ctx.drawImage(img,0,0,cv.width,cv.height);
+  if(H){
+    ctx.lineWidth=Math.max(1.5,cv.width/760);
+    for(let x=10;x<=110.01;x+=5){
+      const a=apply(H,[x,0]),b=apply(H,[x,53.3]);if(!a||!b)continue;
+      ctx.strokeStyle=(x%10===0)?'rgba(80,255,140,.95)':'rgba(80,255,140,.4)';
+      ctx.beginPath();ctx.moveTo(a[0],a[1]);ctx.lineTo(b[0],b[1]);ctx.stroke();}
+    ctx.strokeStyle='rgba(255,90,90,.95)';
+    [0,10,110,120].forEach(x=>{const a=apply(H,[x,0]),b=apply(H,[x,53.3]);
+      if(a&&b){ctx.beginPath();ctx.moveTo(a[0],a[1]);ctx.lineTo(b[0],b[1]);ctx.stroke();}});
+    ctx.strokeStyle='rgba(255,120,255,.95)';
+    [0,53.3].forEach(y=>{const a=apply(H,[0,y]),b=apply(H,[120,y]);
+      if(a&&b){ctx.beginPath();ctx.moveTo(a[0],a[1]);ctx.lineTo(b[0],b[1]);ctx.stroke();}});
+  }
+  const r=Math.max(6,cv.width/170);
+  pts.forEach((p,i)=>{
+    const set=p.x!==null&&p.y!==null;
+    ctx.fillStyle=set?'#5fd98a':'#ffd24a';ctx.strokeStyle='#131313';ctx.lineWidth=2;
+    ctx.beginPath();ctx.arc(p.px[0],p.px[1],r,0,6.3);ctx.fill();ctx.stroke();
+    ctx.fillStyle='#131313';ctx.font='bold '+Math.round(r*1.6)+'px sans-serif';
+    ctx.textAlign='center';ctx.textBaseline='middle';
+    ctx.fillText(String(i+1),p.px[0],p.px[1]+1);});
+}
+
+function render(){
+  const list=document.getElementById('list');
+  list.innerHTML = pts.length?'':'<p class="empty">Click the image to place one.</p>';
+  pts.forEach((p,i)=>{
+    const d=document.createElement('div');
+    d.className='pt'+((p.x!==null&&p.y!==null)?' set':'');
+    const hd=document.createElement('div');hd.className='hd';
+    hd.innerHTML='<b>Point '+(i+1)+'</b><span>pixel '+Math.round(p.px[0])+', '+Math.round(p.px[1])+'</span>';
+    const rm=document.createElement('button');rm.type='button';rm.textContent='remove';
+    rm.onclick=()=>{pts.splice(i,1);refit();};
+    hd.appendChild(rm);
+    const s1=document.createElement('select');
+    LINES.forEach(([t,v])=>{const o=document.createElement('option');o.value=(v===null?'':v);o.textContent=t;s1.appendChild(o);});
+    s1.value=(p.x===null?'':p.x);
+    s1.onchange=()=>{p.x=s1.value===''?null:parseFloat(s1.value);refit();};
+    const s2=document.createElement('select');
+    LANES.forEach(([t,v])=>{const o=document.createElement('option');o.value=(v===null?'':v);o.textContent=t;s2.appendChild(o);});
+    s2.value=(p.y===null?'':p.y);
+    s2.onchange=()=>{p.y=s2.value===''?null:parseFloat(s2.value);refit();};
+    d.append(hd,s1,s2);list.appendChild(d);
+  });
+
+  const L=labelled(),stats=document.getElementById('stats'),msg=document.getElementById('msg');
+  const xs=new Set(L.map(p=>p.x)),ys=new Set(L.map(p=>p.y));
+  const sx=L.length?Math.max(...L.map(p=>p.x))-Math.min(...L.map(p=>p.x)):0;
+  const sy=L.length?Math.max(...L.map(p=>p.y))-Math.min(...L.map(p=>p.y)):0;
+  let rms=null;
+  if(H){let e=0;L.forEach(p=>{const q=apply(H,[p.x,p.y]);if(q)e+=Math.hypot(q[0]-p.px[0],q[1]-p.px[1])**2;});
+        rms=Math.sqrt(e/L.length);}
+  stats.innerHTML = L.length? (
+    row('labelled points',L.length,L.length>=4)+
+    row('different yard lines',xs.size,xs.size>=2)+
+    row('different lanes',ys.size,ys.size>=2)+
+    row('spread downfield',sx.toFixed(0)+' yd',sx>=15)+
+    row('spread across',sy.toFixed(0)+' yd',sy>=15)+
+    (rms!==null?row('fit error',rms.toFixed(1)+' px',rms<8):'')
+  ) : '<p class="empty">Nothing labelled yet.</p>';
+
+  let m='',ok=false;
+  if(L.length<4) m=(4-L.length)+' more labelled point'+(L.length===3?'':'s')+' needed.';
+  else if(ys.size<2) m='All your points are the same distance across, so they lie on one straight line. Add one on a different lane — the far sideline, or a hash.';
+  else if(xs.size<2) m='All your points are on one yard line. Add one on a different yard line.';
+  else if(new Set(L.map(p=>p.x+'|'+p.y)).size<L.length) m='Two points claim the same place on the field. Each must be a different spot.';
+  else if(!H) m='Those points do not determine a map. Spread them further apart.';
+  else if(rms>8) m='Fit error is high — one point is probably mislabelled. Check the green lines.';
+  else {m='Looks good. Check the green lines sit on the paint, then copy below.';ok=true;}
+  msg.textContent=m;msg.className='msg'+(ok?' ok':'');
+
+  document.getElementById('out').value=JSON.stringify({
+    clip:document.querySelector('.clip.on').textContent.trim(),
+    image_size:[natW,natH],
+    points:L.map(p=>({field:[p.x,p.y],pixel:[Math.round(p.px[0]),Math.round(p.px[1])]}))},null,1);
+}
+function row(k,v,good){return '<div class="stat"><span>'+k+'</span><b class="'+(good?'ok':'bad')+'">'+v+'</b></div>';}
+
+function refit(){
+  const L=labelled();
+  const distinct=new Set(L.map(p=>p.x+'|'+p.y)).size;
+  H=(L.length>=4&&new Set(L.map(p=>p.x)).size>=2&&new Set(L.map(p=>p.y)).size>=2&&distinct===L.length)
+      ? fitH(L.map(p=>[p.x,p.y]),L.map(p=>p.px)) : null;
+  draw();render();
+}
+
+function at(ev){const r=cv.getBoundingClientRect();
+  return [(ev.clientX-r.left)*(cv.width/r.width),(ev.clientY-r.top)*(cv.height/r.height)];}
+
+cv.addEventListener('click',ev=>{pts.push({px:at(ev),x:null,y:null});refit();
+  const l=document.getElementById('list');const last=l.lastElementChild;
+  if(last&&last.querySelector) last.querySelector('select').focus();});
+cv.addEventListener('mousemove',ev=>{
+  if(!img.complete||!img.naturalWidth)return;
+  const p=at(ev),r=cv.getBoundingClientRect();
+  zoom.style.display='block';
+  zoom.style.left=Math.min(Math.max(ev.clientX-r.left-85,0),r.width-170)+'px';
+  zoom.style.top=Math.min(Math.max(ev.clientY-r.top-190,0),r.height-170)+'px';
+  zctx.imageSmoothingEnabled=false;zctx.clearRect(0,0,170,170);
+  zctx.drawImage(img,p[0]-18,p[1]-18,36,36,0,0,170,170);
+  zctx.strokeStyle='#ffd24a';zctx.lineWidth=1;
+  zctx.beginPath();zctx.moveTo(85,62);zctx.lineTo(85,108);zctx.moveTo(62,85);zctx.lineTo(108,85);zctx.stroke();});
+cv.addEventListener('mouseleave',()=>{zoom.style.display='none';});
+
+function loadClip(src){img=new Image();
+  img.onload=()=>{natW=img.naturalWidth;natH=img.naturalHeight;cv.width=natW;cv.height=natH;
+                  pts=[];H=null;refit();};
+  img.onerror=()=>{document.getElementById('msg').textContent='Could not load '+src;};
+  img.src=src;}
+document.querySelectorAll('.clip').forEach(b=>b.addEventListener('click',()=>{
+  document.querySelectorAll('.clip').forEach(o=>o.classList.remove('on'));
+  b.classList.add('on');loadClip(b.dataset.img);}));
+document.getElementById('undo').onclick=()=>{pts.pop();refit();};
+document.getElementById('clear').onclick=()=>{pts=[];refit();};
+document.getElementById('copy').onclick=async()=>{
+  const t=document.getElementById('out');t.select();
+  try{await navigator.clipboard.writeText(t.value);}catch(e){document.execCommand('copy');}
+  const b=document.getElementById('copy');b.textContent='Copied';setTimeout(()=>b.textContent='Copy',1200);};
+
+loadClip('cal_nfl.jpg');
+</script>

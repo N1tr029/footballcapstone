@@ -114,6 +114,29 @@ derived from a guess.
 `provenance.coordinates`, and it says it differently depending on whether the
 coordinates came from a tracking system or from a homography.
 
+## Registering a clip the vision model cannot
+
+`register.mode: auto` asks the vision model and is checked against the painted
+lines; below 1.60x the drawn lines are finding no more paint than chance and the
+clip is refused. It clears that bar on some cameras and not others — a low wide
+sideline shot gives it three usable correspondences and it needs more, and three
+of the eight clips here fail on it. The fallback is a person naming points, which
+is what `data/calibrate.html` is for, and these two commands are the steps either
+side of it:
+
+```bash
+python -m gridiron_tracking calframe oregon_wsu          # a frame from the window
+# open data/calibrate.html, load it, name 4-6 points, press Copy
+python -m gridiron_tracking pin oregon_wsu points.json --frame 207
+```
+
+`pin` fits the homography, scores it against the paint on that same frame, and
+writes it into the spec **only if it clears the bar** — so the answer to "is this
+good enough" arrives in a second rather than after twenty minutes of detection.
+Name points that are far apart: opposite sidelines, and yard lines well down the
+field. A fit from points clustered in one corner is self-consistent and can still
+be a hundred yards wrong, which is the whole reason the paint check exists.
+
 ## The three decisions worth knowing about
 
 **Registration is operator-assisted.** Someone clicks four to six named field

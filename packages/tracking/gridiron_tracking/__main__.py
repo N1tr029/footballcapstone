@@ -6,6 +6,8 @@
     python -m gridiron_tracking render nw_michigan --force detect
     python -m gridiron_tracking add ucf_kickoff data/clips/UCF.webm --start 60 --stop 210
     python -m gridiron_tracking unity nw_michigan            # watch it in the Unity app
+    python -m gridiron_tracking calframe oregon_wsu           # a frame to calibrate on
+    python -m gridiron_tracking pin oregon_wsu points.json    # the calibrator's output
     python -m gridiron_tracking label                        # click footballs
     python -m gridiron_tracking train-ball                   # fine-tune on them
     python -m gridiron_tracking unity --all                   # every clip, beside the real plays
@@ -197,6 +199,141 @@ CLIP_PLAY_BASE = 900_000
 CLIP_DRIVE = 99
 
 
+def _calframe(args) -> int:
+    """Write one frame of a clip for the field calibrator to work on.
+
+    Registration is the stage that fails on a clip nobody has calibrated, and the
+    vision model clears the paint bar on some cameras and not others — a low wide
+    sideline shot gives it three usable correspondences and it needs more. The
+    fallback is a person naming points, which ``data/calibrate.html`` was built for;
+    this is the step before that, so the frame it opens is one from the window that
+    is actually going to be rendered.
+    """
+    import cv2
+
+    spec = ClipSpec.load(args.clip, args.spec_dir)
+    frame = args.frame if args.frame is not None else (spec.snap_frame or spec.start)
+    if not (spec.start <= frame <= (spec.stop or frame)):
+        print(f"frame {frame} is outside {args.clip}'s window "
+              f"[{spec.start}:{spec.stop}] — the registration has to come from a "
+              f"frame that gets decoded", file=sys.stderr)
+        return 1
+
+    cap = cv2.VideoCapture(spec.video)
+    got, i = None, 0
+    while i <= frame:
+        ok, img = cap.read()
+        if not ok:
+            break
+        if i == frame:
+            got = img
+        i += 1
+    cap.release()
+    if got is None:
+        print(f"could not read frame {frame} of {spec.video}", file=sys.stderr)
+        return 1
+
+    out = args.out or Path(f"data/cal_{args.clip}.jpg")
+    out.parent.mkdir(parents=True, exist_ok=True)
+    cv2.imwrite(str(out), got, [cv2.IMWRITE_JPEG_QUALITY, 95])
+    h, w = got.shape[:2]
+    print(f"  wrote {out}  ({w}x{h}, frame {frame} of {args.clip})")
+    print(f"  open data/calibrate.html, load it, name four to six points, Copy,")
+    print(f"  then:  python -m gridiron_tracking pin {args.clip} <that file> "
+          f"--frame {frame}")
+    return 0
+
+
+def _pin(args) -> int:
+    """Turn the calibrator's clicks into a pinned registration, and score it.
+
+    The calibrator emits field/pixel pairs. This fits the homography, measures it
+    against the painted yard lines on the same frame, and only then writes it into
+    the spec — so the answer to "is this good enough" arrives before the twenty
+    minutes of detection, not after.
+
+    The paint check is the one that cannot be talked into agreeing: every other
+    measure of a homography is a round trip through the same map, and a fit that is
+    wrong by a factor of two and a half agrees with itself perfectly.
+    """
+    import json
+
+    import cv2
+    import numpy as np
+
+    from .field import SPECS
+    from .registration.homography import Homography
+    from .registration.vision import paint_alignment
+
+    spec = ClipSpec.load(args.clip, args.spec_dir)
+    payload = json.loads(Path(args.points).read_text())
+    points = payload.get("points") or []
+    if len(points) < 4:
+        print(f"{args.points} has {len(points)} points; a homography needs at least "
+              f"4, and 6 well-spread ones is the number that behaves", file=sys.stderr)
+        return 1
+
+    field_xy = np.array([p["field"] for p in points], dtype=float)
+    image_xy = np.array([p["pixel"] for p in points], dtype=float)
+    if len(set(map(tuple, field_xy))) != len(field_xy):
+        print("two points name the same place on the field", file=sys.stderr)
+        return 1
+
+    h = Homography.fit(field_xy, image_xy, threshold_px=args.threshold)
+
+    frame = args.frame if args.frame is not None else (spec.snap_frame or spec.start)
+    cap = cv2.VideoCapture(spec.video)
+    img, i = None, 0
+    while i <= frame:
+        ok, f = cap.read()
+        if not ok:
+            break
+        if i == frame:
+            img = f
+        i += 1
+    cap.release()
+    if img is None:
+        print(f"could not read frame {frame} to check the fit against", file=sys.stderr)
+        return 1
+
+    level = spec.register.level or "nfl"
+    field_spec = SPECS.get({"college": "ncaa", "high_school": "hs"}.get(level, level),
+                           SPECS["nfl"])
+    score = paint_alignment(img, h, field_spec)
+
+    print(f"  {args.clip}: {len(points)} points, {field_spec.name} field, frame {frame}")
+    shown = f"{score:.2f}x" if np.isfinite(score) else "could not be computed"
+    print(f"  paint alignment {shown}   (the bar is {spec.register.min_paint:.2f}; "
+          f"near 1.0 is chance)")
+
+    # NaN comes back when there is no paint under the drawn lines at all, and every
+    # comparison against NaN is False — so testing `score < bar` alone writes the
+    # worst case. Not knowing is not the same as passing.
+    if not np.isfinite(score) and not args.force:
+        print("\n  NOT written. The paint check could not be computed on this frame: "
+              "there is no white under the drawn lines to compare against. Pick a "
+              "frame with visible yard lines, or pass --force if you have checked "
+              "the overlay yourself.", file=sys.stderr)
+        return 1
+
+    if score < spec.register.min_paint and not args.force:
+        print("\n  NOT written. Below the bar the drawn lines are finding no more "
+              f"paint than chance, and a homography that is self-consistent agrees "
+              f"with itself however wrong its scale is. Re-click with points spread "
+              f"further apart — opposite sidelines and yard lines far down the field "
+              f"— or pass --force if you have checked the overlay yourself.",
+              file=sys.stderr)
+        return 1
+
+    spec.register.mode = "pinned"
+    spec.register.homography = [[float(v) for v in row] for row in np.asarray(h.H)]
+    spec.register.frame = frame
+    spec.save(args.spec_dir)
+    print(f"\n  pinned into {args.spec_dir}/{args.clip}.json")
+    print(f"  python -m gridiron_tracking render {args.clip}")
+    return 0
+
+
 def _label(args) -> int:
     """Sample frames from the clips and open the labelling UI.
 
@@ -299,6 +436,21 @@ def main(argv=None) -> int:
     u.set_defaults(fn=_unity)
 
     from .labelling import DATASET_DIR, FRAME_DIR, LABEL_FILE, WEIGHTS_DIR
+
+    cf = sub.add_parser("calframe", help="write a frame for the field calibrator")
+    cf.add_argument("clip")
+    cf.add_argument("--frame", type=int, default=None)
+    cf.add_argument("--out", type=Path, default=None)
+    cf.set_defaults(fn=_calframe)
+
+    pn = sub.add_parser("pin", help="turn calibrator clicks into a checked registration")
+    pn.add_argument("clip")
+    pn.add_argument("points", help="the JSON the calibrator's Copy button gives you")
+    pn.add_argument("--frame", type=int, default=None)
+    pn.add_argument("--threshold", type=float, default=3.0)
+    pn.add_argument("--force", action="store_true",
+                    help="write it even though it is below the paint bar")
+    pn.set_defaults(fn=_pin)
 
     lb = sub.add_parser("label", help="click footballs so a detector can be trained")
     lb.add_argument("clip", nargs="*", help="which clips to sample; default all")

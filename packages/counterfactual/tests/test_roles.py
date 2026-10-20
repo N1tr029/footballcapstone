@@ -15,7 +15,7 @@ from gridiron_tracking import hindsight
 
 pytestmark = pytest.mark.skipif(
     not HINDSIGHT_PLAYS.exists(),
-    reason="packages/replay-engine/hindsight is not merged into this tree",
+    reason="tests/fixtures/hindsight-plays is missing",
 )
 
 

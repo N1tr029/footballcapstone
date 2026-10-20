@@ -4,12 +4,12 @@ Stream 5 of [docs/roles.md](../../docs/roles.md): the app shell, the moment brow
 the What-If view, and the demo path. Nobody owns it yet.
 
 It is **not** the Unity replay app. That is
-[`packages/replay-engine/hindsight`](../../packages/replay-engine/hindsight) — stream 1
-— merged in from `hindsight-frontend`, which is a Unity 6.6 project rather than a web
-frontend despite the name. It already has a play navigator and a playback HUD, so the
-honest question for stream 5 is whether this directory should exist at all or whether
-the app simply *is* the Unity build. That is a decision for whoever picks the stream
-up; nothing here presumes it.
+[`EllisJeremy/hindsight-frontend`](https://github.com/EllisJeremy/hindsight-frontend) —
+stream 1 — a Unity 6.6 project rather than a web frontend despite the name, developed
+in its own repository: front-end code is deliberately not kept here. It already has a
+play navigator and a playback HUD, so the honest question for stream 5 is whether this
+directory should exist at all or whether the app simply *is* the Unity build. That is a
+decision for whoever picks the stream up; nothing here presumes it.
 
 ## What it would consume
 

@@ -159,6 +159,8 @@ def predictions_from(track, horizons: int = 15, jitter: float = 0.0) -> pd.DataF
     return pd.DataFrame(rows)
 
 
-# The Unity app's real plays, merged in from hindsight-frontend. Suites that use
-# them skip when the subtree is absent.
-HINDSIGHT_PLAYS = REPO / "packages/replay-engine/hindsight/Assets/StreamingAssets/plays"
+# The Unity app's real plays. The app lives in EllisJeremy/hindsight-frontend and is
+# no longer part of this repository; its exported plays are committed under tests/
+# instead. Read-only: `whatif` writes simulations, so its --plays default is a working
+# directory rather than this fixture.
+HINDSIGHT_PLAYS = REPO / "tests/fixtures/hindsight-plays"

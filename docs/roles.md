@@ -178,7 +178,7 @@ internals. If you need a new field, it goes in the contract and everyone gets it
 
 | Stream | Owner | Where the work is |
 |---|---|---|
-| 1 — Replay & visualization | Jeremy | `packages/replay-engine/hindsight` — Unity, as recommended above |
+| 1 — Replay & visualization | Jeremy | [`EllisJeremy/hindsight-frontend`](https://github.com/EllisJeremy/hindsight-frontend) — Unity, as recommended above, in its own repository |
 | 2 — Footage → tracking data | Hassan | `packages/tracking` |
 | 3 — Play model | Landon | `packages/counterfactual` |
 | 4 — Data platform & pipeline | | not started |

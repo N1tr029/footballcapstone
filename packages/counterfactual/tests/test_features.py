@@ -132,3 +132,38 @@ def test_ragged_tracks_take_each_player_s_own_last_sample():
     state = features.last_state(track).set_index("player_id")
     assert victim in state.index
     assert state.loc[victim, "t"] < max(track.times)
+
+
+def test_airborne_truth_is_the_label_the_forecast_is_scored_against(tmp_path):
+    """The release's output file: where players actually went while the ball was
+    up. Returned in the release's own coordinates, because mirroring belongs in
+    exactly one place and this is not it."""
+    import pandas as pd
+
+    rows = pd.DataFrame([
+        {"game_id": 1, "play_id": 7, "nfl_id": 100, "frame_id": 1, "x": 40.0, "y": 20.0},
+        {"game_id": 1, "play_id": 7, "nfl_id": 100, "frame_id": 2, "x": 42.0, "y": 21.0},
+        {"game_id": 1, "play_id": 9, "nfl_id": 100, "frame_id": 1, "x": 10.0, "y": 10.0},
+        {"game_id": 2, "play_id": 7, "nfl_id": 100, "frame_id": 1, "x": 99.0, "y": 50.0},
+    ])
+    got = bdb.airborne_truth(rows, game_id=1, play_id=7)
+
+    assert len(got) == 2
+    assert set(got.columns) >= {"game_id", "play_id", "player_id", "frame", "x", "y"}
+    assert list(got["frame"]) == [1, 2]
+    assert list(got["x"]) == [40.0, 42.0]
+
+    csv = tmp_path / "out.csv"
+    rows.to_csv(csv, index=False)
+    from_disk = bdb.airborne_truth(csv, game_id=1, play_id=7)
+    assert len(from_disk) == 2
+
+
+def test_airborne_truth_without_a_filter_returns_everything():
+    import pandas as pd
+
+    rows = pd.DataFrame([
+        {"game_id": 1, "play_id": 7, "nfl_id": 1, "frame_id": 1, "x": 1.0, "y": 2.0},
+        {"game_id": 2, "play_id": 8, "nfl_id": 2, "frame_id": 1, "x": 3.0, "y": 4.0},
+    ])
+    assert len(bdb.airborne_truth(rows)) == 2

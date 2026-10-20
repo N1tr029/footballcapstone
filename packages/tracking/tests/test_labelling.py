@@ -128,3 +128,83 @@ def test_labels_for_frames_that_are_gone_are_ignored(tmp_path):
     labelling.to_yolo(all_shots, store, out_dir=tmp_path / "ds",
                       val_fraction=0.0, log=lambda *a: None)
     assert len(list((tmp_path / "ds/images/train").glob("*.jpg"))) == 1
+
+
+# ------------------------------------------------------------------ extraction
+
+
+def a_video(path, frames=40, w=320, h=180):
+    cv2 = pytest.importorskip("cv2")
+    import numpy as np
+
+    writer = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*"mp4v"), 30.0, (w, h))
+    assert writer.isOpened(), "no mp4v encoder"
+    for i in range(frames):
+        img = np.full((h, w, 3), 40, np.uint8)
+        img[:, : max(1, i * 4)] = 200          # something that changes per frame
+        writer.write(img)
+    writer.release()
+    return path
+
+
+class _Spec:
+    def __init__(self, name, video, start, stop):
+        self.name, self.video, self.start, self.stop = name, video, start, stop
+
+
+def test_extract_samples_each_clips_own_window(tmp_path):
+    """Consecutive frames of a 30 Hz clip are the same picture; every fourth of a
+    window is a far better few hundred images than one clip's worth."""
+    pytest.importorskip("cv2")
+    video = a_video(tmp_path / "v.mp4", frames=40)
+    out = tmp_path / "frames"
+
+    shots = labelling.extract([_Spec("c", str(video), 8, 27)], every=4,
+                              out_dir=out, log=lambda *a: None)
+
+    assert [s.frame for s in shots] == [8, 12, 16, 20, 24]
+    assert all(s.clip == "c" for s in shots)
+    for s in shots:
+        assert (out / f"c_{s.frame:05d}.jpg").exists()
+        assert s.width == 320 and s.height == 180
+
+    # The manifest is what the UI reads, and it must match what was written.
+    again = labelling.load_manifest(out)
+    assert [s.key for s in again] == [s.key for s in shots]
+
+
+def test_extract_does_not_rewrite_frames_it_already_has(tmp_path):
+    """Re-running after adding a clip must not redo the ones already done."""
+    pytest.importorskip("cv2")
+    video = a_video(tmp_path / "v.mp4", frames=20)
+    out = tmp_path / "frames"
+    spec = _Spec("c", str(video), 0, 11)
+
+    labelling.extract([spec], every=4, out_dir=out, log=lambda *a: None)
+    first = (out / "c_00000.jpg").read_bytes()
+    (out / "c_00000.jpg").write_bytes(first + b"marked")
+
+    labelling.extract([spec], every=4, out_dir=out, log=lambda *a: None)
+    assert (out / "c_00000.jpg").read_bytes().endswith(b"marked")
+
+
+def test_a_video_that_will_not_open_is_reported_not_raised(tmp_path):
+    pytest.importorskip("cv2")
+    said = []
+    shots = labelling.extract([_Spec("gone", str(tmp_path / "nope.mp4"), 0, 10)],
+                              out_dir=tmp_path / "frames", log=said.append)
+    assert shots == []
+    assert any("cannot open" in s for s in said)
+
+
+def test_frames_from_two_clips_both_land_in_the_manifest(tmp_path):
+    pytest.importorskip("cv2")
+    a = a_video(tmp_path / "a.mp4", frames=20)
+    b = a_video(tmp_path / "b.mp4", frames=20)
+    out = tmp_path / "frames"
+
+    shots = labelling.extract([_Spec("a", str(a), 0, 7), _Spec("b", str(b), 0, 7)],
+                              every=4, out_dir=out, log=lambda *a: None)
+    assert {s.clip for s in shots} == {"a", "b"}
+    # Which is what makes a clip-held-out split possible at all.
+    assert len({s.clip for s in labelling.load_manifest(out)}) == 2

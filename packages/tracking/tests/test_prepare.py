@@ -295,3 +295,79 @@ def test_the_registration_verdict_refuses_a_degenerate_fit():
     assert fine["trustworthy"] is True
 
     assert registration_verdict([], "cached+propagated")["trustworthy"] is True
+
+
+# ------------------------------------------------------- the report a person reads
+
+
+def test_the_table_renders_for_a_clip_that_worked():
+    out, report = prepare.prepare(clip(with_ball=True))
+    text = report.table()
+
+    assert "roster consolidation" in text
+    assert "possession" in text and "teamA has the ball" in text
+    assert "line of scrimmage" in text and "from the broadcast" in text
+    assert "mirrored so the offense attacks +x" in text
+    assert "reviewable        yes" in text
+    assert "pass window" in text and "in the air" in text
+
+
+def test_the_table_renders_for_every_way_a_clip_can_fail():
+    """It is read exactly when something is wrong, so it must not be the thing
+    that breaks. A None in an f-string here costs the diagnosis."""
+    cases = {}
+
+    no_ball = clip(with_ball=False)
+    cases["no ball"] = prepare.prepare(no_ball)[1]
+
+    sparse = clip(with_ball=True, ball_measured=0.05)
+    cases["sparse ball"] = prepare.prepare(sparse)[1]
+
+    static = clip(with_ball=True)
+    static.meta["ball"]["travelled_yards"] = 1.0
+    cases["static ball"] = prepare.prepare(static)[1]
+
+    folded = clip(with_ball=True)
+    folded.meta["registration"] = {"stage": "computed", "trustworthy": False}
+    folded.meta["render_problems"] = ["the fit is folded"]
+    cases["folded"] = prepare.prepare(folded)[1]
+
+    nolines = clip(with_ball=True)
+    del nolines.meta["broadcast"]
+    cases["no broadcast"] = prepare.prepare(nolines)[1]
+
+    unknown = clip(with_ball=True)
+    del unknown.meta["broadcast"]
+    for f in unknown.frames:                       # no snap => no formation either
+        f.events = []
+    cases["no snap"] = prepare.prepare(unknown)[1]
+
+    for name, report in cases.items():
+        text = report.table()
+        assert isinstance(text, str) and text, name
+        assert "reviewable" in text, name
+        if not report.reviewable:
+            assert "NO" in text, name
+            assert any(b[:20] in text for b in report.blockers), name
+
+
+def test_the_table_says_when_a_side_is_short():
+    track = clip(with_ball=True)
+    for pid in [p for p in list(track.roster) if p.startswith("o")][:4]:
+        track.roster.pop(pid)
+        for f in track.frames:
+            f.players.pop(pid, None)
+
+    out, report = prepare.prepare(track)
+    text = report.table()
+    assert "SHORT OF A FULL SIDE" in text
+    assert "more open than he was" in text
+
+
+def test_the_report_json_matches_the_table(caplog):
+    out, report = prepare.prepare(clip(with_ball=True))
+    d = report.to_json()
+    assert d["reviewable"] is report.reviewable
+    assert d["line_source"] == report.line_source
+    assert d["roster"]["after"] == report.roster.after
+    assert d["events"]["thrown_at"] == report.events.thrown_at

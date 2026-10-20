@@ -257,3 +257,39 @@ def test_real_ids_are_left_alone():
     ids = hindsight.nfl_ids(track)
     assert ids == {pid: int(pid) for pid in track.roster}
     assert all(i < hindsight.SYNTHETIC_ID_BASE for i in ids.values())
+
+
+def test_a_forecast_reads_back_as_a_forecast():
+    """Mutation-found gap: dropping the flag on the way in survived the suite.
+
+    A play this package writes as a forecast must not become an ordinary measured
+    play the moment it round-trips. It did, and the counterfactual CLI then
+    reviewed its own output and wrote forecasts of forecasts.
+    """
+    track = hindsight.read_play(some_plays(1)[0])
+    track.meta["source"] = "simulated"
+    track.meta["simulated_from_play"] = 56
+    for f in track.frames:
+        for p in f.players.values():
+            p.o_source = "from_velocity"
+
+    doc = hindsight.to_play_json(track)
+    assert doc["simulated"] is True
+    assert doc["simulatedFrom"] == 56
+
+    back = hindsight.read_play(doc)
+    assert back.meta["simulated"] is True
+    assert back.meta["source"] == "simulated"
+    assert back.meta["simulated_from_play"] == 56
+    # And provenance on the re-read play says what it is, rather than calling it
+    # measurement from the league's tracking system.
+    from gridiron_tracking import export
+    assert export.provenance(back)["coordinates"]["simulated"] is True
+
+
+def test_a_measured_play_does_not_become_simulated_by_round_tripping():
+    track = hindsight.read_play(some_plays(1)[0])
+    assert track.meta["simulated"] is False
+    back = hindsight.read_play(hindsight.to_play_json(track))
+    assert back.meta["simulated"] is False
+    assert back.meta["source"] == "ngs"

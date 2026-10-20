@@ -110,10 +110,10 @@ def test_the_passer_is_the_quarterback():
             total += 1
             agree += position == "QB"
     assert total > 50
-    # 64/67 when written. Measured at the snap instead of the throw this was 1/115,
-    # because the centre has his hands on the ball; that is the regression this
-    # number guards against.
-    assert agree / total >= 0.90, f"passer was the QB on only {agree}/{total} plays"
+    # 67/68 when written, after linemen stopped being candidates. Measured at the
+    # snap instead of the throw it was 1/115, because the centre has his hands on
+    # the ball; that is the regression this number guards against.
+    assert agree / total >= 0.95, f"passer was the QB on only {agree}/{total} plays"
 
 
 def test_apply_records_the_roles_and_says_they_were_inferred():
@@ -161,3 +161,59 @@ def roles_codes():
     from gridiron_counterfactual import features
 
     return set(features.ROLE_CODES.values()) | {features.MISSING_ROLE}
+
+
+def test_linemen_are_not_offered_as_men_who_should_have_been_thrown_to():
+    """Mutation-found gap: making every offensive player a route runner survived
+    the whole suite. The hit-rate floor is 0.90 and including linemen scored 0.968,
+    so nothing failed — but the inference did once offer Rob Havenstein, a right
+    tackle, as the open alternative."""
+    for track in real_plays():
+        assigned = roles.infer_roles(track)
+        for pid, role in assigned.items():
+            position = track.roster[pid].role
+            if position in roles.LINE and role != roles.COVERAGE:
+                pytest.fail(
+                    f"play {track.meta.get('play_id')}: {position} {pid} was given "
+                    f"the role {role!r}; linemen must be left unassigned so the "
+                    f"model's fillna(-1) keeps them out of the alternatives"
+                )
+        # And the men who ARE candidates are all eligible positions.
+        for pid, role in assigned.items():
+            if role in (roles.ROUTE, roles.TARGET):
+                assert track.roster[pid].role in roles.ELIGIBLE, (
+                    f"{track.roster[pid].role} was offered as a receiver"
+                )
+
+
+def test_a_zero_confidence_side_call_is_refused_not_used():
+    """Mutation-found gap: deleting the confidence check survived.
+
+    infer_sides returns a team name even when it had nothing to go on — most often
+    because the roster carries three kit labels. Taking that name makes one stray
+    track the whole offense and everybody else a defender: 44 'defenders' and 2
+    route runners on the reference clip, and every receiver then reads as covered.
+    """
+    from gridiron_tracking.contract import (
+        Ball, PlayTrack, PlayerFrame, RosterEntry, TrackingFrame,
+    )
+
+    # Three kit labels is what makes infer_sides give up.
+    roster = {}
+    for i in range(8):
+        roster[f"a{i}"] = RosterEntry(id=f"a{i}", team="teamA")
+        roster[f"b{i}"] = RosterEntry(id=f"b{i}", team="teamB")
+    roster["x"] = RosterEntry(id="x", team="kitA")
+
+    frames = [TrackingFrame(
+        t=0.0,
+        players={pid: PlayerFrame(x=50.0 + i, y=26.0, o_source="assumed")
+                 for i, pid in enumerate(roster)},
+        ball=None, events=["ball_snap"])]
+    track = PlayTrack(meta={"source": "vision", "rate": 10}, roster=roster, frames=frames)
+
+    from gridiron_tracking import sides as sidesmod
+    assert sidesmod.infer_sides(track).confidence == 0.0, "fixture no longer ambiguous"
+
+    with pytest.raises(ValueError, match="cannot tell which side"):
+        roles.infer_roles(track)

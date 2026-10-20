@@ -116,12 +116,22 @@ def test_a_missing_ball_is_named_as_the_blocker_it_is():
 
 def test_a_sparse_ball_is_a_blocker_not_a_pass():
     """Presence is not the test. A ball on a handful of frames is worse than none:
-    every derivation downstream runs, returns a number, and is wrong."""
+    every derivation downstream runs, returns a number, and is wrong.
+
+    The assertion names prepare's own blocker rather than just "not reviewable".
+    Mutation-found: deleting prepare's threshold entirely left this test green,
+    because events.derive refuses the same track for its own reasons and the play
+    was unreviewable either way. Two guards, two tests.
+    """
     out, report = prepare.prepare(clip(with_ball=True, ball_measured=0.05))
 
     assert report.has_ball is True
     assert not report.reviewable
-    assert any("actually seen on 5%" in b for b in report.blockers)
+    mine = [b for b in report.blockers if "Below 25%" in b]
+    assert mine, (
+        f"prepare did not raise its own sparse-ball blocker; got {report.blockers}"
+    )
+    assert "actually seen on 5%" in mine[0]
 
 
 def test_a_clip_with_everything_is_reviewable():
@@ -236,3 +246,52 @@ def test_a_trustworthy_registration_passes_through():
     track.meta["render_problems"] = []
     out, report = prepare.prepare(track)
     assert report.reviewable, report.blockers
+
+
+def test_the_fatal_fit_patterns_match_what_the_checks_actually_say():
+    """render refuses to call a fit trustworthy when these appear in its problems.
+
+    Matching on the checks' own wording rather than a structured flag, so the
+    wording and the match have to be kept together — this test is that pairing.
+    """
+    from gridiron_tracking.render import _FATAL_FIT
+
+    real_complaints = [
+        "no usable perspective — the points are probably collinear",
+        "the field projects to a self-crossing shape — the fit is folded",
+        "points lie on only 2 yard line(s) — not enough to fix scale down the field",
+        "no registration — nothing can be placed in yards",
+    ]
+    for complaint in real_complaints:
+        assert _FATAL_FIT.search(complaint), f"not matched: {complaint}"
+
+    survivable = [
+        "best attempt (frame 165) aligned to the paint at only 1.37x; 1.60 is the bar",
+        "implies a camera 80 yards up, which is not where a camera goes",
+        "ball tracking failed: ImportError: no ultralytics",
+    ]
+    for complaint in survivable:
+        assert not _FATAL_FIT.search(complaint), f"wrongly fatal: {complaint}"
+
+
+def test_the_registration_verdict_refuses_a_degenerate_fit():
+    """The one line deciding whether a play's numbers mean anything.
+
+    It lives in render(), which needs a video, a detector and a vision model, so
+    it had no test — and a mutation making every fit trustworthy survived the
+    whole suite.
+    """
+    from gridiron_tracking.render import registration_verdict
+
+    folded = registration_verdict(
+        ["no usable perspective — the points are probably collinear",
+         "the field projects to a self-crossing shape — the fit is folded"],
+        "computed")
+    assert folded["trustworthy"] is False
+    assert folded["stage"] == "computed"
+
+    fine = registration_verdict(
+        ["best attempt (frame 165) aligned to the paint at only 1.37x"], "computed")
+    assert fine["trustworthy"] is True
+
+    assert registration_verdict([], "cached+propagated")["trustworthy"] is True

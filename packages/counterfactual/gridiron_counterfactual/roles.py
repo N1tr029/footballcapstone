@@ -16,7 +16,7 @@ Nothing here is clever: the roles are geometry over the ball.
 not at the snap. At the snap the nearest man to the ball is the centre, who has his
 hands on it — ``sides.py`` relies on exactly that — so snapping-instant proximity
 identifies the passer on 1 play in 115 and the centre on the other 114. Measured at
-``pass_forward`` it is the quarterback on 64 of 67 pass plays. The difference
+``pass_forward``, with linemen excluded, it is the quarterback on 67 of 68. The difference
 matters beyond a label: a centre marked ``Passer`` leaves the quarterback marked as
 a route runner, and the recommendation then offers him as an open alternative.
 
@@ -25,6 +25,11 @@ arrives. This is the one inference worth checking rather than trusting, because 
 whole recommendation is a comparison against this player — so
 :func:`check_against_descriptions` measures it against the play-by-play text, which
 names the target, and reports a hit rate instead of asking anyone to believe it.
+
+**The passer is never a lineman.** Nearest-to-the-ball over the whole offense puts
+a tackle ahead of the quarterback when the ball's position is read a yard off in a
+crowded pocket, and the quarterback — not an eligible receiver either — is then left
+with no role at all. It happened on 1 play of 115.
 
 **The other route runners** are the remaining eligible receivers — WR, TE, RB, FB.
 Linemen are left with no role at all, which the model already handles: it maps roles
@@ -111,7 +116,14 @@ def infer_roles(track: PlayTrack, offense: str | None = None) -> dict[str, str]:
         # list of men who should have been thrown to.
 
     throw = _event_time(track, THROW_EVENTS)
-    passer = _nearest_to_ball(track, offensive, throw)
+    # Linemen are not candidates to have thrown it. Nearest-to-the-ball over the
+    # whole offense puts a tackle in the pocket ahead of the quarterback when the
+    # ball is read a yard off, and then the model's Passer feature lands on a
+    # lineman while the quarterback — who is not an eligible receiver either —
+    # gets no role at all. Measured: it happened on 1 play in 115.
+    throwers = [p for p in offensive
+                if not known_positions or str(track.roster[p].role or "") not in LINE]
+    passer = _nearest_to_ball(track, throwers or offensive, throw)
     if passer is None:
         # No throw on this play, so nobody passed it. Falling back to the snap
         # would name the centre; see the module docstring.

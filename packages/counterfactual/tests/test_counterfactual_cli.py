@@ -143,3 +143,56 @@ def test_a_missing_folder_is_reported_not_crashed(tmp_path, capsys):
 def test_naming_nothing_is_refused():
     with pytest.raises(SystemExit):
         cli.main(["whatif"])
+
+
+def test_a_simulated_play_is_never_itself_reviewed(plays, capsys):
+    """Mutation-found gap: removing the skip survived, because reusing the id
+    masked it. Two independent guards need two tests — a forecast of a forecast is
+    wrong even when it does not multiply."""
+    cli.main(["whatif", "--all-passes", "--plays", str(plays)])
+    sims = [p for p in plays.glob("*.json")
+            if p.name != "index.json" and json.loads(p.read_text()).get("simulated")]
+    assert sims
+
+    capsys.readouterr()
+    cli.main(["whatif", "--all-passes", "--plays", str(plays), "--no-write"])
+    out = capsys.readouterr().out
+
+    # A simulation carries its source play's passResult, so --all-passes picks it
+    # up; review_play then refuses it for having no events and the run prints a
+    # skip. Neither the count of reviews nor the file list shows the difference —
+    # the skip line does, and it is the only observable the guard has.
+    # Matched on a digit boundary: play 2022090800_1230 contains the id
+    # 2022090800_123 as a prefix, and a plain substring test calls that a hit.
+    import re
+    for sim in sims:
+        assert not re.search(rf"\b{re.escape(sim.stem)}(?!\d)", out), (
+            f"{sim.stem} is a forecast and was handed to the reviewer; it should "
+            f"never have been loaded"
+        )
+    assert "skipped" not in out.lower()
+
+
+def test_load_skips_a_simulation_even_when_it_looks_like_a_pass(plays):
+    """The skip tested directly, not through its side effects.
+
+    A simulation written today carries no passResult, so --all-passes filters it
+    out before the skip is reached and removing the skip changes nothing
+    observable. That is an accident of which keys _write_simulation copies: add
+    passResult to that list and the guard becomes the only thing standing between
+    a re-run and a forecast of a forecast.
+    """
+    cli.main(["whatif", "--worst", "1", "--plays", str(plays)])
+    sim = next(p for p in plays.glob("*.json")
+               if p.name != "index.json" and json.loads(p.read_text()).get("simulated"))
+
+    doc = json.loads(sim.read_text())
+    doc["passResult"] = "C"                      # the accident, made deliberate
+    sim.write_text(json.dumps(doc))
+
+    loaded = cli._load(plays, wanted=None, passes_only=True)
+    stems = {p.stem for p, _ in loaded}
+    assert sim.stem not in stems, "a forecast was loaded for review"
+
+    # And it is skipped for being simulated, not for lacking a pass result.
+    assert any(not t.meta.get("simulated") for _, t in loaded)

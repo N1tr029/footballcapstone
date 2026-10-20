@@ -523,6 +523,26 @@ MIN_BALL_TRAVEL = 10.0
 of something that does not move, which on a televised game means a graphic."""
 
 
+def registration_verdict(problems, stage) -> dict:
+    """Whether anything in this file is a coordinate, and why not when it is not.
+
+    Pulled out of ``render`` so it can be tested: the rest of that function needs a
+    video, a detector and a vision model, so the one line deciding whether a play's
+    numbers mean anything had no test at all. It is matched on the checks' own
+    wording rather than a structured flag, which makes the pairing of wording and
+    match something that has to be kept together — see test_prepare.
+    """
+    return {
+        "stage": stage,
+        "trustworthy": not any(_FATAL_FIT.search(p) for p in problems),
+        "note": (
+            "A homography can fit its own points perfectly and still place the "
+            "field a hundred yards away. Read render_problems before believing a "
+            "single coordinate in this file."
+        ),
+    }
+
+
 def _merge_ball(track: PlayTrack, ball, log) -> None:
     """Put the tracked ball on the frames, and say how much of it was seen.
 
@@ -851,15 +871,8 @@ def render(spec: ClipSpec, root: Path = RUN_DIR, force=(), log=print) -> RenderR
     # had no way to know, which is the whole failure mode this package is arranged
     # against.
     out.track.meta["render_problems"] = list(res.problems)
-    out.track.meta["registration"] = {
-        "stage": res.stages.get("register"),
-        "trustworthy": not any(_FATAL_FIT.search(p) for p in res.problems),
-        "note": (
-            "A homography can fit its own points perfectly and still place the "
-            "field a hundred yards away. Read render_problems before believing a "
-            "single coordinate in this file."
-        ),
-    }
+    out.track.meta["registration"] = registration_verdict(
+        res.problems, res.stages.get("register"))
     (out_dir / "track.json").write_text(json.dumps(out.track.to_json()))
     report_txt = res.report.table()
     if res.markers is not None and res.markers.samples:

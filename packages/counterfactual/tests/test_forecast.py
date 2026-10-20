@@ -145,3 +145,19 @@ def test_end_to_end_through_the_real_model():
         for p in f.players.values():
             assert -5.0 <= p.x <= 125.0
             assert -5.0 <= p.y <= 58.0
+
+
+def test_a_predicted_player_the_source_never_had_is_kept_and_flagged():
+    """The model is given the roster, so this should not happen — and if it does,
+    dropping the player silently would be worse than drawing an unknown one."""
+    src = a_track()
+    preds = predictions_from(src)
+    extra = preds[preds.player_id == preds.player_id.iloc[0]].copy()
+    extra["player_id"] = "ghost"
+    preds = __import__("pandas").concat([preds, extra], ignore_index=True)
+
+    sim = forecast.to_play_track(preds, src)
+
+    assert "ghost" in sim.roster
+    assert sim.roster["ghost"].team == "?"
+    assert sim.meta["players_not_in_source_roster"] == ["ghost"]

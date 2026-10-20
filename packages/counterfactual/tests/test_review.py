@@ -199,3 +199,48 @@ def test_the_plays_it_disputes_are_the_plays_that_failed():
     assert disputed - agreed > 0.15, (
         f"separation only {disputed:.0%} vs {agreed:.0%}; this was 50% vs 6%"
     )
+
+
+def test_a_play_with_a_forecast_but_no_target_says_so_and_keeps_the_forecast():
+    """The model reviews a throw. A play with the state supplied but nobody
+    targeted still gets its forecast — it just gets no judgement, and the note
+    names the reason rather than leaving a silent None."""
+    pytest.importorskip("sklearn")
+    from gridiron_counterfactual import features
+
+    track = a_completed_pass()
+    # Supply the play state so review does not refuse for lack of it, then strip
+    # the arrival so no receiver can be identified.
+    arrival = next(t for name in roles.ARRIVAL_EVENTS
+                   if (t := track.event_time(name)) is not None)
+    ball = track.frame_at(arrival).ball
+    features.with_play_state(track, ball_land_x=ball.x, ball_land_y=ball.y,
+                             yardline=track.meta["lineOfScrimmage"], frames_output=8)
+    for f in track.frames:
+        f.events = [e for e in f.events if e not in roles.ARRIVAL_EVENTS]
+
+    result = review.review_play(track)
+
+    assert result.recommendation is None
+    assert result.report is None
+    assert result.forecast.frames, "the forecast should still stand"
+    assert result.forecast.meta["source"] == "simulated"
+    assert any("no targeted receiver" in n for n in result.notes)
+
+
+def test_a_play_with_no_defenders_is_refused_rather_than_softly_reviewed():
+    """A roster that does not partition into two sides is broken input, not a
+    degraded case: separation to the nearest defender has no meaning without any,
+    and a soft note here would let the number through."""
+    pytest.importorskip("sklearn")
+    track = a_completed_pass()
+    defenders = [pid for pid, e in track.roster.items()
+                 if str(e.team).startswith("def")]
+    assert defenders
+    for pid in defenders:
+        track.roster.pop(pid)
+        for f in track.frames:
+            f.players.pop(pid, None)
+
+    with pytest.raises(ValueError, match="does not partition this roster"):
+        review.review_play(track)

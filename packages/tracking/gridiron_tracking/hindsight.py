@@ -137,11 +137,22 @@ def read_play(source: str | Path | dict[str, Any]) -> PlayTrack:
 
     _difference_acceleration(frames, 1.0 / rate)
 
+    # A play this package wrote as a forecast must not read back as measurement.
+    # The flag is in the file; dropping it on the way in meant a simulated play
+    # became an ordinary one the moment it round-tripped, and the counterfactual
+    # CLI then reviewed its own output and wrote forecasts of forecasts.
+    simulated = bool(d.get("simulated"))
+
     meta: dict[str, Any] = {
         "game_id": d.get("gameId"),
         "play_id": d.get("playId"),
-        "source": "ngs",
-        "source_detail": "NFL Big Data Bowl 2025, via the Unity app's exporter",
+        "source": "simulated" if simulated else "ngs",
+        "simulated": simulated,
+        "source_detail": (
+            "a forecast written by packages/counterfactual; this play did not happen"
+            if simulated else
+            "NFL Big Data Bowl 2025, via the Unity app's exporter"
+        ),
         "rate": rate,
         # Its exporter has already normalized the play, which is why nothing here
         # mirrors. Recorded so a reader knows it was not simply right-handed.
@@ -162,6 +173,8 @@ def read_play(source: str | Path | dict[str, Any]) -> PlayTrack:
     for key in PLAY_STATE_KEYS:
         if d.get(key) is not None:
             meta[key] = d[key]
+    if d.get("simulatedFrom") is not None:
+        meta["simulated_from_play"] = d["simulatedFrom"]
 
     return PlayTrack(meta=meta, roster=roster, frames=frames)
 
@@ -279,6 +292,11 @@ def to_play_json(
 
     doc["provenance"] = provenance(track)
     doc["simulated"] = track.meta.get("source") == "simulated"
+    if track.meta.get("simulated_from_play") is not None:
+        # Which real play this forecast argues with. Outside schemaVersion 1 and
+        # ignored by the client, but it is what lets a second run replace a
+        # simulation rather than write another one beside it.
+        doc["simulatedFrom"] = track.meta["simulated_from_play"]
     return doc
 
 

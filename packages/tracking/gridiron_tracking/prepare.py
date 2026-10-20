@@ -138,6 +138,21 @@ def prepare(track: PlayTrack, offense: str | None = None) -> tuple[PlayTrack, Pr
     out, roster_report = rostermod.consolidate(track)
     report = PrepareReport(roster=roster_report)
 
+    # --- is anything in this file a coordinate at all ------------------------
+    # Before the roster, the sides or the ball: if the registration was degenerate
+    # then every x and y below is fiction, and consolidating fiction into eleven a
+    # side produces a confident, well-formed, meaningless play.
+    registration = out.meta.get("registration") or {}
+    if registration and not registration.get("trustworthy", True):
+        fatal = [p for p in (out.meta.get("render_problems") or [])]
+        report.blockers.append(
+            "the registration is not trustworthy, so nothing here is in yards: "
+            + "; ".join(fatal[:2])
+            + ". A homography can fit its own points perfectly and still place the "
+              "field a hundred yards away — re-register this clip or pin a checked "
+              "homography, as nw_michigan does."
+        )
+
     situation = out.meta.get("broadcast") or {}
     los = situation.get("lineOfScrimmage")
     attacks = situation.get("attacks") or out.meta.get("play_direction")

@@ -25,6 +25,7 @@ pipeline that is meant to work on any upload ever gets there.
 from __future__ import annotations
 
 import json
+import re
 import time
 from dataclasses import dataclass, field as dc_field
 from pathlib import Path
@@ -508,6 +509,15 @@ def _drop_static_candidates(cand: dict, log, radius: float = 1.5,
     return out
 
 
+_FATAL_FIT = re.compile(
+    r"collinear|folded|not enough to fix scale|no registration|self-crossing",
+    re.I,
+)
+"""Problems that mean the coordinates are not coordinates. These are the checks'
+own words; matching on them rather than restructuring vision.py's warning lists,
+because the wording is the thing a person reads and it should stay one string."""
+
+
 MIN_BALL_TRAVEL = 10.0
 """Yards a real ball covers in a play, at the very least. Below this the track is
 of something that does not move, which on a televised game means a graphic."""
@@ -833,6 +843,23 @@ def render(spec: ClipSpec, root: Path = RUN_DIR, force=(), log=print) -> RenderR
     )
     res.stages["render"] = "computed"
 
+    # Everything the render wants to complain about, written into the file rather
+    # than only onto the console. devin_td registered with a fit the checks called
+    # folded, collinear and "a hundred yards wrong and still perfect on its own
+    # points" — and track.json came out carrying 41 players positioned in yards
+    # with nothing in it to say the yards were fiction. A consumer reading the file
+    # had no way to know, which is the whole failure mode this package is arranged
+    # against.
+    out.track.meta["render_problems"] = list(res.problems)
+    out.track.meta["registration"] = {
+        "stage": res.stages.get("register"),
+        "trustworthy": not any(_FATAL_FIT.search(p) for p in res.problems),
+        "note": (
+            "A homography can fit its own points perfectly and still place the "
+            "field a hundred yards away. Read render_problems before believing a "
+            "single coordinate in this file."
+        ),
+    }
     (out_dir / "track.json").write_text(json.dumps(out.track.to_json()))
     report_txt = res.report.table()
     if res.markers is not None and res.markers.samples:

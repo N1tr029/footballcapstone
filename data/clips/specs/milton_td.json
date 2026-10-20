@@ -31,10 +31,12 @@
     "min_inliers": 25,
     "horizon_frac": 0.35,
     "candidate_frames": [
-      175,
-      221,
-      300,
-      400
+      150,
+      220,
+      290,
+      360,
+      430,
+      500
     ]
   },
   "track": {

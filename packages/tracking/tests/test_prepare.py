@@ -210,3 +210,29 @@ def test_a_ball_that_travels_passes():
     track.meta["ball"]["travelled_yards"] = 34.0
     out, report = prepare.prepare(track)
     assert report.reviewable, report.blockers
+
+
+def test_a_folded_registration_stops_everything_downstream():
+    """devin_td's actual failure. It registered, tracked 41 players and wrote a
+    well-formed track.json in which no number was a coordinate — the checks had
+    called the fit folded and collinear and said so only on the console."""
+    track = clip(with_ball=True)
+    track.meta["registration"] = {"stage": "computed", "trustworthy": False}
+    track.meta["render_problems"] = [
+        "no usable perspective — the points are probably collinear",
+        "the field projects to a self-crossing shape — the fit is folded",
+    ]
+
+    out, report = prepare.prepare(track)
+
+    assert not report.reviewable
+    assert any("nothing here is in yards" in b for b in report.blockers)
+    assert any("collinear" in b for b in report.blockers)
+
+
+def test_a_trustworthy_registration_passes_through():
+    track = clip(with_ball=True)
+    track.meta["registration"] = {"stage": "computed", "trustworthy": True}
+    track.meta["render_problems"] = []
+    out, report = prepare.prepare(track)
+    assert report.reviewable, report.blockers

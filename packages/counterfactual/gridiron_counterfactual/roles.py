@@ -29,7 +29,7 @@ names the target, and reports a hit rate instead of asking anyone to believe it.
 **The passer is never a lineman.** Nearest-to-the-ball over the whole offense puts
 a tackle ahead of the quarterback when the ball's position is read a yard off in a
 crowded pocket, and the quarterback — not an eligible receiver either — is then left
-with no role at all. It happened on 1 play of 115.
+with no role at all. It happened on 2 plays of 115.
 
 **The other route runners** are the remaining eligible receivers — WR, TE, RB, FB.
 Linemen are left with no role at all, which the model already handles: it maps roles

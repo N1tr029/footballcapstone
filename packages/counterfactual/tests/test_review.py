@@ -136,7 +136,7 @@ def test_what_it_says_about_a_whole_game_is_not_absurd():
 
     assert len(calls) >= 50, f"only {len(calls)} passes reviewed"
 
-    # 33 of 67 when written. A model telling you 90% of NFL throws were wrong is
+    # 35 of 67 when written. A model telling you 90% of NFL throws were wrong is
     # not reviewing the game, it is misreading its own inputs.
     flagged = sum(1 for c in calls if c != "unchanged") / len(calls)
     assert flagged <= 0.80, (

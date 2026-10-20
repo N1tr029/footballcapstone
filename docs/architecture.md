@@ -28,7 +28,8 @@ what crosses a boundary today.
                  (stream 2)                  │
                                              ▼
   Big Data Bowl ──▶ counterfactual.bdb ──▶ PlayTrack ◀──▶ tracking.hindsight
-  release                                    │            ▲   (Unity, stream 1)
+  release                                    │            ▲   (Unity, stream 1,
+                                             │            │    separate repository)
                                              │            │
                                              │       replay-engine/prototype
                                              │
@@ -47,7 +48,7 @@ what crosses a boundary today.
 
 | seam | module | status |
 |---|---|---|
-| Unity play JSON ↔ `PlayTrack` | `tracking.hindsight` | done, tested against the app's own 115 real plays, round trip asserted lossless |
+| Unity play JSON ↔ `PlayTrack` | `tracking.hindsight` | done, tested against the app's own 115 real plays (pinned in `tests/fixtures/hindsight-plays`), round trip asserted lossless |
 | release → `PlayTrack` | `counterfactual.bdb` | done, tested |
 | `PlayTrack` → model features | `counterfactual.features` | done, tested, round-trip asserted exact |
 | predictions → simulated `PlayTrack` | `counterfactual.forecast` | done, tested against the real fitted model |

@@ -1,6 +1,6 @@
 """The Unity app's schema, checked against the 115 real plays committed with it.
 
-No fixtures here beyond one hand-built case. ``packages/replay-engine/hindsight``
+No fixtures here beyond one hand-built case. ``tests/fixtures/hindsight-plays``
 ships the real Big Data Bowl 2025 release through its own exporter, so the reader
 and writer are tested against the thing they will actually be handed — which is
 also the only way the angle-convention mismatch could be caught. Its ``o`` is a
@@ -18,7 +18,7 @@ from gridiron_tracking.contract import PlayTrack, validate
 
 pytestmark = pytest.mark.skipif(
     not HINDSIGHT_PLAYS.exists(),
-    reason="packages/replay-engine/hindsight is not merged into this tree",
+    reason="tests/fixtures/hindsight-plays is missing",
 )
 
 

@@ -23,11 +23,13 @@ import pytest
 
 from tracking_support import HINDSIGHT_PLAYS, REPO
 
-PLAY_DATA_CS = REPO / "packages/replay-engine/hindsight/Assets/Scripts/Data/PlayData.cs"
+# A pinned copy of the client's DTOs. The app itself lives in hindsight-frontend, so
+# this is a snapshot that can go stale — see tests/fixtures/README.md.
+PLAY_DATA_CS = REPO / "tests/fixtures/hindsight-contract/PlayData.cs"
 
 pytestmark = pytest.mark.skipif(
     not PLAY_DATA_CS.exists(),
-    reason="packages/replay-engine/hindsight is not merged into this tree",
+    reason="tests/fixtures/hindsight-contract/PlayData.cs is missing",
 )
 
 # Written on purpose and known not to reach the client. Each one needs a reason,

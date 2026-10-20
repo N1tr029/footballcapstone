@@ -25,7 +25,11 @@ from gridiron_tracking import hindsight
 
 from . import review
 
-UNITY_PLAYS = Path("packages/replay-engine/hindsight/Assets/StreamingAssets/plays")
+UNITY_PLAYS = Path("data/unity-plays")
+"""A StreamingAssets/plays folder. This command reads plays from it and writes its
+simulations back beside them, so it is a working directory, not the committed fixture
+under tests/: point it at `tracking ... unity` output or at a hindsight-frontend
+checkout."""
 CLIP_GAME_ID = 999_000_001
 """Plays exported from video, which this command skips: they have no ball and no
 play state, so there is nothing for the model to key a forecast on."""
@@ -54,8 +58,8 @@ def _load(plays_dir: Path, wanted: list[str] | None, passes_only: bool):
 def _whatif(args) -> int:
     plays_dir: Path = args.plays
     if not plays_dir.exists():
-        print(f"{plays_dir} does not exist — is the hindsight subtree merged?",
-              file=sys.stderr)
+        print(f"{plays_dir} does not exist — run `tracking ... unity` to write plays "
+              f"there, or pass --plays", file=sys.stderr)
         return 1
 
     wanted = list(args.play) or None

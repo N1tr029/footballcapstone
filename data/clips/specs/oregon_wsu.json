@@ -1,14 +1,14 @@
 {
   "name": "oregon_wsu",
   "video": "data/clips/Oregon_vs._Washington_St_-_FOX_COLLEGE_FOOTBALL_HIGHLIGHTS.webm",
-  "start": 300,
-  "stop": 450,
-  "step": 1,
-  "snap_frame": 300,
+  "start": 135,
+  "stop": 507,
+  "step": 2,
+  "snap_frame": 207,
   "fps": null,
   "out_fps": 12,
   "title": "Oregon at Washington St (FOX)",
-  "notes": "",
+  "notes": "Snap ~207; the old window (300-450) began a full second after it. Carries both broadcast lines and a 1ST & 10 graphic, so the situation reads. Ball tracking is off until there are fine-tuned weights: the generic sports-ball class finds the graphic or a player, and tiling it triples the render for a known-bad result. Flip track.ball and set track.ball_weights after train-ball.",
   "detect": {
     "weights": "yolo11x.pt",
     "conf": 0.25,
@@ -51,5 +51,6 @@
     "static_yards": 1.0,
     "sideline_band": 2.0,
     "ball": false
-  }
+  },
+  "distance_yards": 10
 }

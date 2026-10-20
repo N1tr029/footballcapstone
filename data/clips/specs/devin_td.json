@@ -1,14 +1,14 @@
 {
   "name": "devin_td",
   "video": "data/clips/Devin_Singletary_touchdown_%2851394753691%29.webm",
-  "start": 60,
-  "stop": 210,
+  "start": 99,
+  "stop": 285,
   "step": 1,
-  "snap_frame": 60,
+  "snap_frame": 135,
   "fps": null,
   "out_fps": 12,
   "title": "Devin Singletary touchdown \u2014 1080p",
-  "notes": "",
+  "notes": "Snap ~135. Shot low and wide; the field is the bottom third of the frame. Ball tracking is off until there are fine-tuned weights: the generic sports-ball class finds the graphic or a player, and tiling it triples the render for a known-bad result. Flip track.ball and set track.ball_weights after train-ball.",
   "detect": {
     "weights": "yolo11x.pt",
     "conf": 0.25,

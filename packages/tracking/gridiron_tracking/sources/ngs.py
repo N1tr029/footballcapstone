@@ -290,6 +290,10 @@ def to_play_track(
             "source": "ngs",
             "rate": rate,
             "play_direction": pd_.direction,
+            # Whether the coordinates above were flipped to reach contract space.
+            # play_direction is the SOURCE's direction; this is what was done about
+            # it. field.mirror_track maintains the same pair.
+            "mirrored": flip,
             "play_direction_source": pd_.source,
             "play_direction_confidence": round(pd_.confidence, 3),
             "orientation_measured": has_o,

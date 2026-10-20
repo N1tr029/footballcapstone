@@ -167,7 +167,11 @@ def clamp_to_field(x: float, y: float, spec: FieldSpec = NFL, margin: float = 5.
 
 
 def mirror_track(track):
-    """Turn a play round so the offense attacks +x, in place, and say so in meta.
+    """Turn a play round so the offense attacks +x, in place, and record both facts.
+
+    Afterwards ``meta["mirrored"]`` is True and ``meta["play_direction"]`` is
+    ``"left"`` — the direction the play ran in its source, which is what the rest of
+    the repository means by that key. Calling this twice undoes it.
 
     The contract fixes the direction of attack: x runs 0-120 and the offense goes
     toward +x. Public releases carry a ``playDirection`` column and
@@ -191,6 +195,14 @@ def mirror_track(track):
         if f.ball is not None:
             f.ball.x, f.ball.y = LENGTH - f.ball.x, WIDTH - f.ball.y
 
-    track.meta["mirrored"] = not track.meta.get("mirrored", False)
-    track.meta["play_direction"] = "right"
+    mirrored = not track.meta.get("mirrored", False)
+    track.meta["mirrored"] = mirrored
+    # ``play_direction`` records the direction of the play in its ORIGINAL source,
+    # not the direction it now runs in. That is the convention ``sources.ngs`` set
+    # and the one ``features`` and ``forecast`` rely on to put a play back into the
+    # frame of reference the model was fitted in. Writing "right" here because the
+    # offense now attacks +x made the same field mean two different things
+    # depending on which producer made the track, and quietly opted mirrored vision
+    # plays out of that conversion.
+    track.meta["play_direction"] = "left" if mirrored else "right"
     return track

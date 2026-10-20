@@ -73,7 +73,10 @@ def test_a_left_running_clip_comes_out_attacking_plus_x():
     out, report = prepare.prepare(track)
 
     assert report.mirrored is True
-    assert out.meta["play_direction"] == "right"
+    # play_direction records the SOURCE's direction and mirrored says what was done
+    # about it; the two together are the convention features and forecast read.
+    assert out.meta["play_direction"] == "left"
+    assert out.meta["mirrored"] is True
     # The line of scrimmage moves with everybody, or possession was decided against
     # a line that is no longer where the players are.
     assert report.line_of_scrimmage == pytest.approx(field.LENGTH - 47.0)

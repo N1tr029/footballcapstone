@@ -146,13 +146,16 @@ def test_mirroring_turns_a_play_round_and_is_its_own_inverse():
               for pid, p in track.frames[0].players.items()}
 
     field.mirror_track(track)
-    assert track.meta["play_direction"] == "right"
     assert track.meta["mirrored"] is True
+    # The source ran left; the coordinates now run right. play_direction names the
+    # former, because that is what tells features how to undo it.
+    assert track.meta["play_direction"] == "left"
     moved = track.frames[0].players[next(iter(before))]
     assert moved.x == pytest.approx(field.LENGTH - before[next(iter(before))][0])
 
     field.mirror_track(track)
     assert track.meta["mirrored"] is False
+    assert track.meta["play_direction"] == "right"
     for pid, p in track.frames[0].players.items():
         x, y, d, o = before[pid]
         assert p.x == pytest.approx(x)

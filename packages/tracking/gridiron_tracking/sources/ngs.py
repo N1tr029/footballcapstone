@@ -345,14 +345,25 @@ def check_angle_convention(play: pd.DataFrame, min_speed: float = 2.0, rate: int
 # -------------------------------------------------------------------- helpers
 
 
-def _player_key(row) -> str:
-    pid = row.get("player_id")
-    if pd.isna(pid):
-        return "ball"
+def player_key(pid: Any) -> str:
+    """A player id as it appears in a ``PlayTrack`` roster.
+
+    Public and in this module because this is where roster keys are minted: every
+    other module that has to name the same player has to reproduce exactly this.
+    Four copies of it had grown across the two packages, and four copies of the
+    function that decides who is who is four chances for them to stop agreeing.
+    """
     try:
         return str(int(pid))
     except (TypeError, ValueError):
         return str(pid)
+
+
+def _player_key(row) -> str:
+    pid = row.get("player_id")
+    if pd.isna(pid):
+        return "ball"
+    return player_key(pid)
 
 
 def _maybe_int(v) -> int | None:

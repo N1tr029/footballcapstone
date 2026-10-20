@@ -42,7 +42,9 @@ from typing import Any
 from .contract import (
     RATE, Ball, PlayTrack, PlayerFrame, RosterEntry, TrackingFrame, wrap_deg,
 )
-from .sources.ngs import contract_angle_to_ngs, ngs_angle_to_contract
+from .sources.ngs import (
+    contract_angle_to_ngs, ngs_angle_to_contract, player_key as _key,
+)
 
 SCHEMA_VERSION = 1
 """The version this module reads and writes. Jeremy's notes say to bump it on a
@@ -419,11 +421,7 @@ def _difference_acceleration(frames: list[TrackingFrame], dt: float) -> None:
                 p.a = abs(p.s - samples[j - 1][1].s) / dt
 
 
-def _key(pid: Any) -> str:
-    try:
-        return str(int(pid))
-    except (TypeError, ValueError):
-        return str(pid)
+
 
 
 def _maybe_int(v: Any) -> int | None:

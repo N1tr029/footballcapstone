@@ -148,3 +148,37 @@ def test_mirroring_is_the_only_thing_that_changes_direction():
 
     for a, b in zip(before, after):
         assert a == pytest.approx(b, abs=1e-9)
+
+
+def test_one_definition_of_who_is_who():
+    """Four copies of the roster-key function had grown across the two packages.
+
+    Every module that names a player has to reproduce exactly what ngs minted, so
+    four copies is four chances for them to stop agreeing — and the symptom would
+    be a player silently splitting in two between modules.
+    """
+    import inspect
+
+    from gridiron_counterfactual import bdb, features, forecast
+    from gridiron_tracking import hindsight
+    from gridiron_tracking.sources.ngs import player_key
+
+    for module in (bdb, features, forecast, hindsight):
+        assert module._key is player_key, (
+            f"{module.__name__} has its own roster-key function again"
+        )
+
+    assert player_key(47965) == "47965"
+    assert player_key("47965") == "47965"
+    assert player_key(47965.0) == "47965"
+    assert player_key("t17") == "t17"          # vision tracks are not numbers
+
+
+def test_the_minting_path_and_the_public_one_agree():
+    """ngs._player_key takes a row and ngs.player_key takes an id; a player must
+    come out with the same name either way."""
+    from gridiron_tracking.sources import ngs
+
+    for pid in (47965, "47965", 47965.0, "t3"):
+        assert ngs._player_key({"player_id": pid}) == ngs.player_key(pid)
+    assert ngs._player_key({"player_id": float("nan")}) == "ball"

@@ -32,6 +32,8 @@ from gridiron_tracking.contract import (
     RATE, PlayTrack, PlayerFrame, RosterEntry, TrackingFrame, wrap_deg,
 )
 
+from gridiron_tracking.sources.ngs import player_key as _key
+
 from .features import to_ngs_space
 
 
@@ -220,8 +222,4 @@ def predict(
     return out
 
 
-def _key(pid: Any) -> str:
-    try:
-        return str(int(pid))
-    except (TypeError, ValueError):
-        return str(pid)
+

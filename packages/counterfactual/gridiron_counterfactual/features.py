@@ -36,6 +36,7 @@ import pandas as pd
 
 from gridiron_tracking.contract import PlayTrack, wrap_deg
 from gridiron_tracking.sources import ngs
+from gridiron_tracking.sources.ngs import player_key as _key
 
 FEATURE_COLUMNS = [
     "x", "y", "s", "a", "dir", "o", "ball_land_x", "ball_land_y",
@@ -293,8 +294,4 @@ def round_trip_error(play: pd.DataFrame, game_id: Any = None, play_id: Any = Non
     return out
 
 
-def _key(pid: Any) -> str:
-    try:
-        return str(int(pid))
-    except (TypeError, ValueError):
-        return str(pid)
+

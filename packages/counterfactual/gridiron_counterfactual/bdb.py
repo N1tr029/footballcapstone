@@ -37,6 +37,7 @@ import pandas as pd
 
 from gridiron_tracking.contract import PlayTrack
 from gridiron_tracking.sources import ngs
+from gridiron_tracking.sources.ngs import player_key as _key
 
 ROLES = ("Passer", "Targeted Receiver", "Other Route Runner", "Defensive Coverage")
 """``player_role`` in the 2026 release. The model keys its features on these, and
@@ -143,12 +144,7 @@ def to_play_track(
     return track
 
 
-def _key(pid: Any) -> str:
-    """The roster key ``ngs.to_play_track`` will have given this player."""
-    try:
-        return str(int(pid))
-    except (TypeError, ValueError):
-        return str(pid)
+
 
 
 def airborne_truth(

@@ -212,6 +212,27 @@ basketballs, tennis balls and footballs of the other kind, and a brown spheroid 
 is nine pixels across and in someone's hands most of the play is out of its
 distribution.
 
+**Two things that were tried instead of labelling, and did not work.** Both are
+here so the next person does not spend the afternoon again.
+
+*Reading the ball off the picture by eye, to label it.* At 10x zoom on the frames
+where the ball is in somebody's hands there is reliably a tan object near the
+hands — and it cannot be told apart from the player's own forearm. Both are tan,
+both are about ten pixels, and the arms are extended exactly where the ball is.
+Labelling that teaches a detector to find forearms, which would look like progress
+and be worse than nothing. A person who knows football can do this; reading it off
+a still at this resolution cannot.
+
+*Finding it by motion instead.* A thrown ball is the only small thing on the field
+moving faster than a person can run, so cancelling the camera's pan and looking for
+small fast blobs should isolate it without any detector. Measured on the reference
+clip: after phase-correlation pan cancellation and a turf mask, **101 small on-field
+blobs per frame** — limbs, paint texture, shadows — and of 3222 linked chains of
+four or more frames the longest ran at 0.1 to 1.4 px/frame, which is static
+texture. No fast coherent trajectory at all. The pan cancellation and the turf mask
+both work; the signal-to-noise is the problem, and tuning it further against a clip
+with no ground truth is how the 42% figure above happened in the first place.
+
 **What would clear it.** A detector fine-tuned on footballs — a few hundred labelled
 frames across these eight clips, which is an afternoon of labelling and an hour of
 training. Nothing else in the chain is waiting on research; this is the one piece,

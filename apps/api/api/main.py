@@ -8,6 +8,7 @@ remote base URL to http://<host>:8000/plays. No Unity code changes.
 Run from apps/api:   uvicorn api.main:app --reload
 Interactive docs:    http://localhost:8000/docs
 """
+import json
 import sys
 from typing import Optional
 
@@ -56,6 +57,7 @@ def health():
         "games": len(store.games),
         "plays": len(store.play_files),
         "reviews": len(store.reports),
+        "simulated": len(store.simulated_of),
     }
 
 
@@ -89,6 +91,64 @@ def list_recommendations():
     return {"plays": sorted(store.reports)}
 
 
+def _strip_json(play_id: str) -> str:
+    return play_id[: -len(".json")] if play_id.endswith(".json") else play_id
+
+
+def _read(path) -> dict:
+    with open(path, encoding="utf-8") as f:
+        return json.load(f)
+
+
+@app.get("/plays/{play_id}/optimal", summary="The model's simulated version of a play")
+def get_optimal(play_id: str):
+    """The play model's forecast of this play, in the same play JSON as the real one
+    and flagged `"simulated": true`. It starts at the throw and shows where the model
+    predicted everyone would be when the ball arrived.
+
+    Simulated plays are produced offline by the play model:
+    `python -m gridiron_counterfactual whatif <playId>` (or `--worst N`)."""
+    play_id = _strip_json(play_id)
+    if store.play_path(play_id) is None:
+        raise HTTPException(404, f"Play '{play_id}' not found")
+    path = store.optimal_path(play_id)
+    if path is None:
+        raise HTTPException(
+            404,
+            f"No simulated version of '{play_id}' yet. Plays that have one: GET /optimal. "
+            f"Generate it with: python -m gridiron_counterfactual whatif {play_id}",
+        )
+    return FileResponse(path, media_type="application/json")
+
+
+@app.get("/plays/{play_id}/compare", summary="The real play and the model's version, in one response")
+def compare(play_id: str):
+    """Both plays in one call, for drawing them side by side. `optimal` is null and
+    `hasOptimal` false when the model has not produced a version of this play.
+    `recommendation` is the model's verdict when one exists, else null."""
+    play_id = _strip_json(play_id)
+    current = store.play_path(play_id)
+    if current is None:
+        raise HTTPException(404, f"Play '{play_id}' not found")
+    optimal = store.optimal_path(play_id)
+    report = store.report(play_id)
+    return {
+        "playId": play_id,
+        "hasOptimal": optimal is not None,
+        "current": _read(current),
+        "optimal": _read(optimal) if optimal else None,
+        "recommendation": from_report(report).to_json() if report else None,
+    }
+
+
+@app.get("/optimal", summary="Plays that have a simulated version")
+def list_optimal():
+    return {"plays": [
+        {"playId": real, "optimalPlayId": sim}
+        for real, sim in sorted(store.simulated_of.items())
+    ]}
+
+
 @app.get(
     "/plays/{play_id}",
     response_model=PlayDetail,
@@ -97,8 +157,7 @@ def list_recommendations():
 )
 def get_play(play_id: str):
     # WebPlaySource requests "{id}.json"; accept both forms.
-    if play_id.endswith(".json"):
-        play_id = play_id[: -len(".json")]
+    play_id = _strip_json(play_id)
     path = store.play_path(play_id)
     if path is None:
         raise HTTPException(404, f"Play '{play_id}' not found")

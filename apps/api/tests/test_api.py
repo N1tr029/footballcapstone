@@ -45,9 +45,19 @@ REPORT = {
 }
 
 
+def _write_simulated(folder, game_id, play_id, simulated_from):
+    """What `gridiron_counterfactual whatif` writes beside a real play."""
+    real = json.loads((folder / f"{game_id}_{simulated_from}.json").read_text())
+    real.update({"playId": play_id, "simulated": True, "simulatedFrom": simulated_from,
+                 "description": "SIMULATED — model's forecast of this throw (pass). This did not happen."})
+    real["frames"][0]["players"][0]["x"] = 40.0
+    (folder / f"{game_id}_{play_id}.json").write_text(json.dumps(real))
+
+
 @pytest.fixture
 def client(tmp_path, monkeypatch):
     _write_game(tmp_path / "plays", 2022090800, [56, 77])
+    _write_simulated(tmp_path / "plays", 2022090800, 57, simulated_from=56)
     decisions = tmp_path / "decisions.jsonl"
     decisions.write_text(json.dumps(REPORT) + "\n")
     monkeypatch.setattr(main, "store", PlayStore(str(tmp_path / "plays"), str(decisions)))
@@ -56,7 +66,7 @@ def client(tmp_path, monkeypatch):
 
 def test_health(client):
     body = client.get("/health").json()
-    assert body == {"status": "ok", "schemaVersion": 1, "games": 1, "plays": 2, "reviews": 1}
+    assert body == {"status": "ok", "schemaVersion": 1, "games": 1, "plays": 3, "reviews": 1, "simulated": 1}
 
 
 def test_index_matches_webplaysource_paths(client):
@@ -95,6 +105,58 @@ def test_recommendation_uses_model_contract(client):
     assert client.get("/recommendations").json() == {"plays": ["2022090800_56"]}
 
 
+def test_optimal_returns_the_simulated_play(client):
+    r = client.get("/plays/2022090800_56/optimal")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["simulated"] is True and body["simulatedFrom"] == 56
+    assert body["frames"][0]["players"][0]["x"] == 40.0
+    assert client.get("/plays/2022090800_56.json/optimal").status_code == 200
+
+
+def test_optimal_missing_explains_how_to_make_it(client):
+    r = client.get("/plays/2022090800_77/optimal")
+    assert r.status_code == 404
+    assert "whatif 2022090800_77" in r.json()["detail"]
+    assert client.get("/plays/1_1/optimal").status_code == 404
+
+
+def test_compare_returns_both(client):
+    body = client.get("/plays/2022090800_56/compare").json()
+    assert body["hasOptimal"] is True
+    assert body["current"]["frames"][0]["players"][0]["x"] == 30.1
+    assert body["optimal"]["frames"][0]["players"][0]["x"] == 40.0
+    assert body["recommendation"]["call"]["type"] == "pass"
+
+    none = client.get("/plays/2022090800_77/compare").json()
+    assert none["hasOptimal"] is False and none["optimal"] is None and none["recommendation"] is None
+
+
+def test_list_optimal(client):
+    assert client.get("/optimal").json() == {
+        "plays": [{"playId": "2022090800_56", "optimalPlayId": "2022090800_57"}]
+    }
+
+
+def test_index_with_only_id_fields_still_loads(tmp_path):
+    folder = tmp_path / "plays"
+    folder.mkdir()
+    (folder / "index.json").write_text(json.dumps({
+        "schemaVersion": 1, "gameId": 1, "homeTeam": "A", "visitorTeam": "B",
+        "plays": [{"id": "1_2", "gameId": 1, "playId": 2, "description": "SIMULATED"}],
+    }))
+    assert PlayStore(str(folder), str(tmp_path / "none.jsonl")).games[1].plays[0].id == "1_2"
+
+
+def test_a_broken_index_does_not_stop_the_others(tmp_path):
+    _write_game(tmp_path / "plays" / "good", 2022090800, [56])
+    bad = tmp_path / "plays" / "bad"
+    bad.mkdir()
+    (bad / "index.json").write_text('{"schemaVersion": 1}')
+    s = PlayStore(str(tmp_path / "plays"), str(tmp_path / "none.jsonl"))
+    assert list(s.games) == [2022090800]
+
+
 def test_cors_header_for_webgl(client):
     r = client.get("/plays", headers={"Origin": "http://localhost:5000"})
     assert r.headers.get("access-control-allow-origin") == "*"
@@ -109,3 +171,5 @@ def test_real_repo_data_loads():
         assert entry.id in s.play_files, f"index lists {entry.id} but no file exists"
     if DEFAULT_DECISIONS.is_file():
         assert s.reports
+    for real, sim in s.simulated_of.items():
+        assert real in s.play_files, f"{sim} was simulated from {real}, which is missing"

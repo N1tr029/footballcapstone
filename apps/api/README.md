@@ -37,6 +37,9 @@ In a WebGL build the page runs on another origin; CORS is open, so that works.
 | GET | `/games` | Games with an index loaded |
 | GET | `/plays` (also `/plays/index.json`) | Play index for one game; pass `?gameId=` when several are loaded |
 | GET | `/plays/{id}` (also `/plays/{id}.json`) | One play with all frames, exactly as exported |
+| GET | `/plays/{id}/optimal` | The model's simulated version of the play (same play JSON, `"simulated": true`), or 404 with how to generate it |
+| GET | `/plays/{id}/compare` | `{ playId, hasOptimal, current, optimal, recommendation }`: the real play and the model's version in one call |
+| GET | `/optimal` | Every play that has a simulated version, as `{ playId, optimalPlayId }` |
 | GET | `/plays/{id}/recommendation` | The play model's review of that play, or 404 |
 | GET | `/recommendations` | IDs of every reviewed play |
 | POST | `/admin/reload` | Re-scan files after re-exporting or re-running the model |
@@ -52,6 +55,23 @@ Play IDs are `{gameId}_{playId}`, e.g. `2022090800_56`.
 
 `PLAYS_DIR` is scanned recursively. The exporter clears its output folder on
 every run, so to serve several games, export each into its own subfolder.
+
+## Current play vs. the model's version
+
+`/plays/{id}` is the play as recorded. `/plays/{id}/optimal` is the play model's
+forecast of the same play: it starts at the throw and shows where the model
+predicted everyone would be when the ball arrived. It is not a different play
+call drawn from scratch. It is the model's expectation of this one, and its
+verdict on whether another receiver was more open comes from the same run.
+
+Simulated plays are generated offline, not per request:
+
+```
+python -m gridiron_counterfactual whatif 2022090800_56   # one play
+python -m gridiron_counterfactual whatif --worst 5       # the five the model most disputes
+```
+
+then `POST /admin/reload` (or restart) to pick them up.
 
 ## Known gap
 

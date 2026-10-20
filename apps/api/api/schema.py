@@ -20,19 +20,22 @@ class _Loose(BaseModel):
 
 
 class PlayIndexEntry(_Loose):
+    # Only the id fields are required. Producers (the exporter, the whatif command,
+    # the vision pipeline) fill different subsets, and the API must not refuse to
+    # start because one of them leaves a display field out.
     id: str                       # "{gameId}_{playId}", used to fetch the play
     gameId: int
     playId: int
-    quarter: int
-    gameClock: str
-    driveNumber: int
-    possessionTeam: str
-    down: int
-    yardsToGo: int
-    playType: str                 # pass | run | sack | scramble | kneel | spike
-    passResult: str = ""
-    yardsGained: int = 0
-    touchdown: bool = False
+    quarter: Optional[int] = None
+    gameClock: Optional[str] = None
+    driveNumber: Optional[int] = None
+    possessionTeam: Optional[str] = None
+    down: Optional[int] = None
+    yardsToGo: Optional[int] = None
+    playType: Optional[str] = None  # pass | run | sack | scramble | kneel | spike
+    passResult: Optional[str] = None
+    yardsGained: Optional[int] = None
+    touchdown: Optional[bool] = None
     description: str = ""
 
 

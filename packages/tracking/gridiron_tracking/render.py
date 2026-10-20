@@ -428,7 +428,7 @@ def _ball_boxes(model, image, spec: ClipSpec):
     """
     n = max(1, int(spec.track.ball_tiles))
     kw = dict(conf=spec.track.ball_conf, imgsz=spec.track.ball_imgsz,
-              classes=[32], verbose=False)
+              classes=[spec.track.ball_class], verbose=False)
     h, w = image.shape[:2]
     out = []
 
@@ -577,7 +577,7 @@ def _ball(spec: ClipSpec, track: PlayTrack, frames, reg, fps, offset: int, log):
         from ultralytics import YOLO
     except ImportError:
         return None
-    model = YOLO(spec.detect.weights)
+    model = YOLO(spec.track.ball_weights or spec.detect.weights)
     cand: dict[float, list] = {}
     players: dict[float, np.ndarray] = {}
     seen = 0
@@ -598,7 +598,8 @@ def _ball(spec: ClipSpec, track: PlayTrack, frames, reg, fps, offset: int, log):
         cand[key] = got
     log(f"    ball candidates on {seen}/{len(track.frames)} frames "
         f"({spec.track.ball_tiles}x{spec.track.ball_tiles} tiles, "
-        f"conf {spec.track.ball_conf}, imgsz {spec.track.ball_imgsz})")
+        f"conf {spec.track.ball_conf}, imgsz {spec.track.ball_imgsz}, "
+        f"{'fine-tuned weights' if spec.track.ball_weights else 'generic sports-ball class'})")
     cand = _drop_static_candidates(cand, log)
     bt = ballmod.track_ball([round(f.t, 3) for f in track.frames], cand, players_by_t=players)
     log(f"    {bt.summary()}")

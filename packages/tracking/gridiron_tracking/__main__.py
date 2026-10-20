@@ -6,6 +6,8 @@
     python -m gridiron_tracking render nw_michigan --force detect
     python -m gridiron_tracking add ucf_kickoff data/clips/UCF.webm --start 60 --stop 210
     python -m gridiron_tracking unity nw_michigan            # watch it in the Unity app
+    python -m gridiron_tracking label                        # click footballs
+    python -m gridiron_tracking train-ball                   # fine-tune on them
     python -m gridiron_tracking unity --all                   # every clip, beside the real plays
 
 ``--all`` is the one that matters. A change that lifts one clip and drops three is the
@@ -195,6 +197,67 @@ CLIP_PLAY_BASE = 900_000
 CLIP_DRIVE = 99
 
 
+def _label(args) -> int:
+    """Sample frames from the clips and open the labelling UI.
+
+    The one piece of this project that cannot be automated: COCO's sports-ball
+    class finds the down-and-distance graphic, and no amount of tuning changes what
+    it was trained on. A few hundred clicks fixes it.
+    """
+    from . import labelling
+    from .label_server import serve
+
+    shots = labelling.load_manifest(args.frames)
+    if args.extract or not shots:
+        specs = load_all(args.spec_dir) if not args.clip else [
+            ClipSpec.load(n, args.spec_dir) for n in args.clip]
+        if not specs:
+            print(f"no clip specs in {args.spec_dir}", file=sys.stderr)
+            return 1
+        print(f"sampling every {args.every}th frame of {len(specs)} clips:")
+        shots = labelling.extract(specs, every=args.every, out_dir=args.frames)
+        if not shots:
+            print("no frames extracted", file=sys.stderr)
+            return 1
+
+    serve(port=args.port, frame_dir=args.frames, label_file=args.labels)
+    return 0
+
+
+def _train_ball(args) -> int:
+    """Export what has been labelled and fine-tune a football detector on it."""
+    from . import labelling
+
+    shots = labelling.load_manifest(args.frames)
+    labels = labelling.LabelSet.load(args.labels)
+    if not labels.labels:
+        print(f"nothing labelled in {args.labels}; run `label` first", file=sys.stderr)
+        return 1
+
+    print(f"  {labels.summary()}")
+    counts = labels.counts()
+    if counts["with_a_ball"] < args.min_boxes:
+        print(f"  only {counts['with_a_ball']} frames have a ball in them. Below "
+              f"{args.min_boxes} a fine-tune learns this clip rather than a football "
+              f"— pass --min-boxes to override if you know better.", file=sys.stderr)
+        return 1
+
+    data = labelling.to_yolo(shots, labels, out_dir=args.dataset,
+                            val_fraction=args.val_fraction)
+    if args.export_only:
+        print(f"  dataset at {data}")
+        return 0
+
+    best = labelling.train(data, base_weights=args.base, epochs=args.epochs,
+                           imgsz=args.imgsz, out_dir=args.weights)
+    print(f"\n  Now set it on a clip and measure:\n"
+          f'    "track": {{"ball": true, "ball_weights": "{best}", "ball_class": 0}}\n'
+          f"    python -m gridiron_tracking render <clip>\n"
+          f"  and read travelled_yards and measured_fraction, not the detection count "
+          f"alone — that has looked like progress twice and been furniture.")
+    return 0
+
+
 def main(argv=None) -> int:
     load_env()
     ap = argparse.ArgumentParser(prog="python -m gridiron_tracking")
@@ -234,6 +297,32 @@ def main(argv=None) -> int:
                    help="index only these clips, dropping the app's own 115 real "
                         "plays from the navigator (the files stay on disk)")
     u.set_defaults(fn=_unity)
+
+    from .labelling import DATASET_DIR, FRAME_DIR, LABEL_FILE, WEIGHTS_DIR
+
+    lb = sub.add_parser("label", help="click footballs so a detector can be trained")
+    lb.add_argument("clip", nargs="*", help="which clips to sample; default all")
+    lb.add_argument("--extract", action="store_true", help="re-sample the frames")
+    lb.add_argument("--every", type=int, default=4,
+                    help="sample every Nth frame of each clip's window")
+    lb.add_argument("--frames", type=Path, default=FRAME_DIR)
+    lb.add_argument("--labels", type=Path, default=LABEL_FILE)
+    lb.add_argument("--port", type=int, default=4176)
+    lb.set_defaults(fn=_label)
+
+    tb = sub.add_parser("train-ball", help="fine-tune a football detector on the labels")
+    tb.add_argument("--frames", type=Path, default=FRAME_DIR)
+    tb.add_argument("--labels", type=Path, default=LABEL_FILE)
+    tb.add_argument("--dataset", type=Path, default=DATASET_DIR)
+    tb.add_argument("--weights", type=Path, default=WEIGHTS_DIR)
+    tb.add_argument("--base", default="yolo11n.pt")
+    tb.add_argument("--epochs", type=int, default=60)
+    tb.add_argument("--imgsz", type=int, default=1280)
+    tb.add_argument("--val-fraction", type=float, default=0.2)
+    tb.add_argument("--min-boxes", type=int, default=80)
+    tb.add_argument("--export-only", action="store_true",
+                    help="write the YOLO dataset and stop")
+    tb.set_defaults(fn=_train_ball)
 
     args = ap.parse_args(argv)
     if args.cmd in ("render", "unity") and not args.all and not args.clip:

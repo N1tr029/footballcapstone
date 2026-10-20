@@ -191,7 +191,36 @@ distribution.
 
 **What would clear it.** A detector fine-tuned on footballs — a few hundred labelled
 frames across these eight clips, which is an afternoon of labelling and an hour of
-training. Nothing else in the chain is waiting on research; this is the one piece.
+training. Nothing else in the chain is waiting on research; this is the one piece,
+and the machinery around it is built:
+
+```bash
+python -m gridiron_tracking label        # samples frames, opens the labelling UI
+python -m gridiron_tracking train-ball   # exports a YOLO dataset and fine-tunes
+```
+
+`label` samples every fourth frame of each clip's own window — consecutive frames
+of a 30 Hz clip are the same picture and a model learns nothing from the second —
+and serves a page that magnifies the cursor 5x, because the thing being clicked is
+about nine pixels across. Click the ball; press `N` when it is in a pile or behind
+somebody. Every click is written to `data/labels/labels.json` as it happens, so a
+closed tab costs one frame rather than an afternoon.
+
+`train-ball` holds out **whole clips** rather than random frames. Frames four apart
+from one camera are near-duplicates, so a random split scores memorisation; holding
+out a clip measures the only thing worth knowing, which is whether it finds a ball
+on footage it has not seen. Frames marked `N` become empty label files — the
+negatives that stop a fine-tune learning the graphic all over again.
+
+Then point a clip at the result and **measure it the same way**:
+
+```jsonc
+"track": { "ball": true, "ball_weights": "data/labels/weights/football/weights/best.pt",
+           "ball_class": 0 }
+```
+
+Read `travelled_yards` beside `measured_fraction`. A detection rate alone has looked
+like progress twice on this task and been furniture both times.
 
 **What the pipeline does meanwhile**, and the part worth keeping whatever replaces
 the detector: it refuses, three times over and for three different reasons.

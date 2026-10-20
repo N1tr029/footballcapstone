@@ -196,6 +196,15 @@ class TrackSpec:
     the throw instant and there is a tracker downstream whose whole job is to throw
     out the ones that do not move like a ball."""
     ball_imgsz: int = 1536
+    ball_weights: str | None = None
+    """Weights for the ball, when they are not the player detector's.
+
+    ``None`` uses ``detect.weights`` and COCO's generic sports-ball class, which
+    cannot find a football in broadcast footage — see the package README. Point this
+    at the output of ``train-ball`` once there is one."""
+    ball_class: int = 32
+    """Class index to keep. 32 is COCO's sports ball; a detector fine-tuned by
+    ``train-ball`` has one class and it is 0."""
 
 
 @dataclass

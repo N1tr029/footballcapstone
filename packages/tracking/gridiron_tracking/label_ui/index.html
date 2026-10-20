@@ -1,0 +1,230 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Label the football</title>
+<style>
+  :root {
+    --bg: #11151c; --panel: #1a212b; --line: #2b3542;
+    --ink: #e8edf4; --dim: #8b97a8; --hot: #ffb703; --ok: #4ade80; --no: #f87171;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font: 14px/1.5 ui-sans-serif, system-ui, -apple-system, sans-serif; }
+  header { display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap;
+           padding: 10px 16px; border-bottom: 1px solid var(--line); }
+  h1 { font-size: 15px; margin: 0; font-weight: 650; letter-spacing: .01em; }
+  .counts { color: var(--dim); font-variant-numeric: tabular-nums; }
+  .counts b { color: var(--ink); font-weight: 650; }
+  main { display: grid; grid-template-columns: 1fr 260px; gap: 0; height: calc(100vh - 92px); }
+  #stage { position: relative; overflow: hidden; display: grid; place-items: center;
+           background: #0b0e13; }
+  #frame { max-width: 100%; max-height: 100%; cursor: crosshair; display: block; }
+  #glass { position: absolute; width: 190px; height: 190px; border: 2px solid var(--hot);
+           border-radius: 50%; pointer-events: none; display: none; overflow: hidden;
+           box-shadow: 0 8px 30px #000a; background: #000; }
+  #glass canvas { display: block; }
+  #glass::after { content: ""; position: absolute; inset: 0;
+                  background:
+                    linear-gradient(var(--hot), var(--hot)) 50% 50% / 1px 100% no-repeat,
+                    linear-gradient(var(--hot), var(--hot)) 50% 50% / 100% 1px no-repeat;
+                  opacity: .55; }
+  aside { border-left: 1px solid var(--line); padding: 14px 16px; overflow-y: auto;
+          background: var(--panel); }
+  aside h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .08em;
+             color: var(--dim); margin: 18px 0 8px; font-weight: 650; }
+  aside h2:first-child { margin-top: 0; }
+  kbd { background: #0d1117; border: 1px solid var(--line); border-bottom-width: 2px;
+        border-radius: 4px; padding: 1px 6px; font: 600 12px ui-monospace, monospace; }
+  .keys { display: grid; grid-template-columns: auto 1fr; gap: 6px 10px; align-items: center; }
+  .keys span { color: var(--dim); }
+  footer { display: flex; gap: 10px; align-items: center; padding: 10px 16px;
+           border-top: 1px solid var(--line); flex-wrap: wrap; }
+  button { background: #222c38; color: var(--ink); border: 1px solid var(--line);
+           border-radius: 6px; padding: 6px 12px; font: inherit; cursor: pointer; }
+  button:hover { background: #2b3845; }
+  .bar { flex: 1; height: 6px; background: #0d1117; border-radius: 3px; overflow: hidden;
+         min-width: 160px; }
+  .bar i { display: block; height: 100%; background: var(--ok); width: 0; }
+  .state { font-variant-numeric: tabular-nums; }
+  .yes { color: var(--ok); } .nope { color: var(--no); } .none { color: var(--dim); }
+  .note { color: var(--dim); font-size: 13px; }
+  .note b { color: var(--ink); font-weight: 600; }
+</style>
+
+<header>
+  <h1>Label the football</h1>
+  <div class="counts">
+    <span id="where">—</span> ·
+    <b id="done">0</b> labelled ·
+    <b id="withball">0</b> with a ball ·
+    <b id="without">0</b> without
+  </div>
+</header>
+
+<main>
+  <div id="stage">
+    <img id="frame" alt="">
+    <div id="glass"><canvas id="zoom" width="190" height="190"></canvas></div>
+  </div>
+
+  <aside>
+    <h2>What to do</h2>
+    <p class="note">
+      Click the <b>ball</b>. If you cannot see it — in a pile, behind a body, out of
+      frame — press <kbd>N</kbd>. Those frames matter: a detector trained only on
+      frames containing a ball learns to find one everywhere.
+    </p>
+    <p class="note">
+      The magnifier follows the cursor at 5&times;. Click on the ball's middle; the
+      box size is fixed and you can change it below if it is plainly wrong for this
+      clip.
+    </p>
+
+    <h2>Keys</h2>
+    <div class="keys">
+      <kbd>click</kbd><span>place the ball here</span>
+      <kbd>N</kbd><span>no ball visible</span>
+      <kbd>&larr;</kbd><span>previous frame</span>
+      <kbd>&rarr;</kbd><span>next frame</span>
+      <kbd>U</kbd><span>unlabel this frame</span>
+      <kbd>+</kbd> <span>bigger box</span>
+      <kbd>&minus;</kbd><span>smaller box</span>
+      <kbd>J</kbd><span>jump to the first unlabelled</span>
+    </div>
+
+    <h2>Box</h2>
+    <div class="note"><b id="boxsize">22</b> px square</div>
+
+    <h2>This frame</h2>
+    <div class="state" id="state">not labelled</div>
+  </aside>
+</main>
+
+<footer>
+  <button id="prev">&larr; Prev</button>
+  <button id="next">Next &rarr;</button>
+  <button id="noball">No ball (N)</button>
+  <button id="jump">First unlabelled (J)</button>
+  <div class="bar"><i id="progress"></i></div>
+</footer>
+
+<script>
+const img = document.getElementById('frame');
+const glass = document.getElementById('glass');
+const zoom = document.getElementById('zoom');
+const zctx = zoom.getContext('2d');
+const stage = document.getElementById('stage');
+
+let shots = [], labels = {}, i = 0, box = 22;
+const ZOOM = 5;
+
+function el(id) { return document.getElementById(id); }
+
+async function boot() {
+  shots = await (await fetch('manifest.json')).json();
+  labels = await (await fetch('labels')).json();
+  if (!shots.length) { el('where').textContent = 'no frames — run the extract step'; return; }
+  i = firstUnlabelled();
+  show();
+}
+
+function firstUnlabelled() {
+  const k = shots.findIndex(s => !(s.key in labels));
+  return k === -1 ? 0 : k;
+}
+
+function show() {
+  const s = shots[i];
+  img.src = 'frames/' + s.path.split('/').pop();
+  el('where').textContent = `${s.clip} · frame ${s.frame} · ${i + 1}/${shots.length}`;
+  const l = labels[s.key];
+  el('state').innerHTML = !l ? '<span class="none">not labelled</span>'
+    : (l.x === null ? '<span class="nope">no ball visible</span>'
+                    : `<span class="yes">ball at ${Math.round(l.x)}, ${Math.round(l.y)}</span>`);
+  el('boxsize').textContent = box;
+  counts();
+}
+
+function counts() {
+  const all = Object.values(labels);
+  const withBall = all.filter(l => l.x !== null).length;
+  el('done').textContent = all.length;
+  el('withball').textContent = withBall;
+  el('without').textContent = all.length - withBall;
+  el('progress').style.width = (100 * all.length / Math.max(shots.length, 1)) + '%';
+}
+
+// Local state first, then advance, then save. Waiting on the round trip before
+// moving on costs a beat per frame, which over a few hundred frames is the
+// difference between a job someone finishes and one they abandon. The save is
+// still per-click — the server writes the file on every POST — so a closed tab
+// loses at most the last one.
+function put(label) {
+  labels[label.key] = label;
+  fetch('labels', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(label),
+  }).catch(() => { el('where').textContent = 'SAVE FAILED — is the server still up?'; });
+}
+
+function step(by) { i = Math.min(shots.length - 1, Math.max(0, i + by)); show(); }
+
+// --- where a click lands in the SOURCE image, not the scaled one ---------------
+function sourceXY(ev) {
+  const r = img.getBoundingClientRect();
+  const s = shots[i];
+  return {
+    x: (ev.clientX - r.left) * (s.width / r.width),
+    y: (ev.clientY - r.top) * (s.height / r.height),
+  };
+}
+
+img.addEventListener('click', ev => {
+  const { x, y } = sourceXY(ev);
+  put({ key: shots[i].key, x, y, size: box });
+  step(1);
+});
+
+// --- the magnifier -------------------------------------------------------------
+img.addEventListener('mousemove', ev => {
+  const r = img.getBoundingClientRect();
+  const sr = stage.getBoundingClientRect();
+  const { x, y } = sourceXY(ev);
+  glass.style.display = 'block';
+  glass.style.left = (ev.clientX - sr.left - 95) + 'px';
+  glass.style.top = (ev.clientY - sr.top - 215) + 'px';
+  const side = 190 / ZOOM;
+  zctx.imageSmoothingEnabled = false;
+  zctx.clearRect(0, 0, 190, 190);
+  try {
+    zctx.drawImage(img, x - side / 2, y - side / 2, side, side, 0, 0, 190, 190);
+  } catch (e) { /* image not ready */ }
+  // the box as it will be written, drawn to scale
+  zctx.strokeStyle = '#ffb703';
+  zctx.lineWidth = 1;
+  zctx.strokeRect(95 - box * ZOOM / 2, 95 - box * ZOOM / 2, box * ZOOM, box * ZOOM);
+});
+img.addEventListener('mouseleave', () => { glass.style.display = 'none'; });
+
+// --- keys ----------------------------------------------------------------------
+addEventListener('keydown', ev => {
+  if (ev.key === 'ArrowRight') step(1);
+  else if (ev.key === 'ArrowLeft') step(-1);
+  else if (ev.key.toLowerCase() === 'n') { put({ key: shots[i].key, x: null, y: null, size: box }); step(1); }
+  else if (ev.key.toLowerCase() === 'u') {
+    const key = shots[i].key;
+    delete labels[key]; show();
+    fetch('labels/' + encodeURIComponent(key), { method: 'DELETE' }).catch(() => {});
+  }
+  else if (ev.key.toLowerCase() === 'j') { i = firstUnlabelled(); show(); }
+  else if (ev.key === '+' || ev.key === '=') { box = Math.min(80, box + 2); show(); }
+  else if (ev.key === '-' || ev.key === '_') { box = Math.max(6, box - 2); show(); }
+});
+
+el('prev').onclick = () => step(-1);
+el('next').onclick = () => step(1);
+el('noball').onclick = () => { put({ key: shots[i].key, x: null, y: null, size: box }); step(1); };
+el('jump').onclick = () => { i = firstUnlabelled(); show(); };
+
+boot();
+</script>

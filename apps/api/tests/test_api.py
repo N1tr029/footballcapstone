@@ -76,6 +76,19 @@ def test_index_matches_webplaysource_paths(client):
     assert [p["id"] for p in a["plays"]] == ["2022090800_56", "2022090800_77"]
 
 
+def test_index_is_served_byte_for_byte(client, tmp_path):
+    # A sparse entry, like the ones `whatif` writes. Re-serializing it would add
+    # playType/yardsGained/touchdown as null, which Unity's JsonUtility can't read.
+    path = tmp_path / "plays" / "index.json"
+    index = json.loads(path.read_text())
+    index["plays"].append({"id": "2022090800_57", "gameId": 2022090800, "playId": 57, "description": "SIMULATED"})
+    path.write_text(json.dumps(index))
+    main.store.reload()
+    r = client.get("/plays")
+    assert r.content == path.read_bytes()
+    assert b"null" not in r.content
+
+
 def test_play_served_with_and_without_json_suffix(client):
     a = client.get("/plays/2022090800_56")
     b = client.get("/plays/2022090800_56.json")

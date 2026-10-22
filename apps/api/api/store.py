@@ -41,6 +41,7 @@ class PlayStore:
         self.plays_dir = Path(plays_dir or os.environ.get("PLAYS_DIR") or DEFAULT_PLAYS_DIR)
         self.decisions_path = Path(decisions_path or os.environ.get("DECISIONS_PATH") or DEFAULT_DECISIONS)
         self.games: Dict[int, PlayIndex] = {}
+        self.index_paths: Dict[int, Path] = {}
         self.play_files: Dict[str, Path] = {}
         self.simulated_of: Dict[str, str] = {}   # real play id -> simulated play id
         self.reports: Dict[str, dict] = {}
@@ -48,6 +49,7 @@ class PlayStore:
 
     def reload(self) -> None:
         games: Dict[int, PlayIndex] = {}
+        index_paths: Dict[int, Path] = {}
         files: Dict[str, Path] = {}
         simulated_of: Dict[str, str] = {}
 
@@ -62,6 +64,7 @@ class PlayStore:
                         log.warning("skipping %s: %s", path, e)
                         continue
                     games[index.gameId] = index
+                    index_paths[index.gameId] = path
                 elif PLAY_FILE.match(path.name):
                     files[path.stem] = path
                     real = _simulated_from(path)
@@ -79,7 +82,8 @@ class PlayStore:
                             reports[f"{int(r['game_id'])}_{int(r['play_id'])}"] = r
 
         # Swap in one step so a failed reload leaves the old data serving.
-        self.games, self.play_files, self.simulated_of, self.reports = games, files, simulated_of, reports
+        self.games, self.index_paths = games, index_paths
+        self.play_files, self.simulated_of, self.reports = files, simulated_of, reports
 
     def play_path(self, play_id: str) -> Optional[Path]:
         return self.play_files.get(play_id)

@@ -72,7 +72,10 @@ def list_games():
 @app.get("/plays", response_model=PlayIndex, summary="Play index for one game")
 @app.get("/plays/index.json", response_model=PlayIndex, include_in_schema=False)
 def get_index(gameId: Optional[int] = Query(None, description="Required only when several games are loaded")):
-    return _index(gameId)
+    # Served as written, like the play files. Re-serializing the validated model
+    # would add every optional field the producer left out as null, and Unity's
+    # JsonUtility cannot read null into an int or bool.
+    return FileResponse(store.index_paths[_index(gameId).gameId], media_type="application/json")
 
 
 @app.get("/plays/{play_id}/recommendation", summary="Play model's review of one play")

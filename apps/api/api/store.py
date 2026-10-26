@@ -27,19 +27,43 @@ from typing import Dict, Optional
 from pydantic import ValidationError
 
 from .schema import PlayIndex
+from .suggested import to_hindsight
 
 log = logging.getLogger("api.store")
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-DEFAULT_PLAYS_DIR = REPO_ROOT / "packages/replay-engine/hindsight/Assets/StreamingAssets/plays"
+# Where plays may live, in order. The Unity app is moving to its own repository
+# (PR #4): the whatif command then writes to data/unity-plays/ and the real plays
+# are pinned under tests/fixtures/. Checking each lets the API work on either side
+# of that move without a code change. PLAYS_DIR overrides all of them.
+PLAYS_DIR_CANDIDATES = [
+    REPO_ROOT / "data/unity-plays",
+    REPO_ROOT / "packages/replay-engine/hindsight/Assets/StreamingAssets/plays",
+    REPO_ROOT / "tests/fixtures/hindsight-plays",
+]
 DEFAULT_DECISIONS = REPO_ROOT / "packages/counterfactual/reports/decisions.jsonl"
+DEFAULT_SUGGESTED = REPO_ROOT / "packages/counterfactual/reports/suggested_plays.jsonl"
+
+
+def default_plays_dir() -> Path:
+    """The first candidate folder that holds at least one game index."""
+    for candidate in PLAYS_DIR_CANDIDATES:
+        if candidate.is_dir() and any(candidate.rglob("index.json")):
+            return candidate
+    return PLAYS_DIR_CANDIDATES[0]
+
+
+DEFAULT_PLAYS_DIR = default_plays_dir()
 PLAY_FILE = re.compile(r"^(\d+)_(\d+)\.json$")
 
 
 class PlayStore:
-    def __init__(self, plays_dir: Optional[str] = None, decisions_path: Optional[str] = None):
-        self.plays_dir = Path(plays_dir or os.environ.get("PLAYS_DIR") or DEFAULT_PLAYS_DIR)
+    def __init__(self, plays_dir: Optional[str] = None, decisions_path: Optional[str] = None,
+                 suggested_path: Optional[str] = None):
+        self.plays_dir = Path(plays_dir or os.environ.get("PLAYS_DIR") or default_plays_dir())
         self.decisions_path = Path(decisions_path or os.environ.get("DECISIONS_PATH") or DEFAULT_DECISIONS)
+        self.suggested_path = Path(suggested_path or os.environ.get("SUGGESTED_PATH") or DEFAULT_SUGGESTED)
+        self.suggested: Dict[str, dict] = {}     # play id -> Hindsight play JSON
         self.games: Dict[int, PlayIndex] = {}
         self.index_paths: Dict[int, Path] = {}
         self.play_files: Dict[str, Path] = {}
@@ -81,9 +105,23 @@ class PlayStore:
                         if r.get("game_id") is not None and r.get("play_id") is not None:
                             reports[f"{int(r['game_id'])}_{int(r['play_id'])}"] = r
 
+        suggested: Dict[str, dict] = {}
+        if self.suggested_path.is_file():
+            with open(self.suggested_path, encoding="utf-8") as f:
+                for n, line in enumerate(f, 1):
+                    if not line.strip():
+                        continue
+                    try:
+                        payload = json.loads(line)
+                        key = f"{int(payload['game_id'])}_{int(payload['play_id'])}"
+                        suggested[key] = to_hindsight(payload, reports.get(key))
+                    except (ValueError, KeyError, TypeError) as e:
+                        log.warning("skipping line %d of %s: %s", n, self.suggested_path, e)
+
         # Swap in one step so a failed reload leaves the old data serving.
         self.games, self.index_paths = games, index_paths
         self.play_files, self.simulated_of, self.reports = files, simulated_of, reports
+        self.suggested = suggested
 
     def play_path(self, play_id: str) -> Optional[Path]:
         return self.play_files.get(play_id)

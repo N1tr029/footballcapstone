@@ -58,6 +58,7 @@ def health():
         "plays": len(store.play_files),
         "reviews": len(store.reports),
         "simulated": len(store.simulated_of),
+        "suggested": len(store.suggested),
     }
 
 
@@ -124,21 +125,68 @@ def get_optimal(play_id: str):
     return FileResponse(path, media_type="application/json")
 
 
-@app.get("/plays/{play_id}/compare", summary="The real play and the model's version, in one response")
+@app.get("/plays/{play_id}/suggested", summary="The model's suggested play, with ball, events and reason")
+def get_suggested(play_id: str):
+    """Landon's suggested play (decision_engine's suggested_plays.jsonl), converted
+    to Hindsight play JSON. Unlike /optimal it carries:
+
+    - `simulationStartFrameId`: the first frame that is the model's prediction;
+      frames before it are recorded tracking.
+    - `events` on frames: ball_snap and pass_forward (inferred), pass_arrived (simulated).
+    - `ball` on every frame: a straight line from the passer to the recommended receiver.
+    - `recommendation`: the decision, the recommended receiver (`targetNflId`), the
+      receiver actually targeted, and the model's `reason` in plain English.
+
+    Fields beyond schemaVersion 1 are ignored by Unity until PlayData declares them."""
+    play_id = _strip_json(play_id)
+    play = store.suggested.get(play_id)
+    if play is None:
+        raise HTTPException(
+            404,
+            f"No suggested play for '{play_id}'. Plays that have one: GET /suggested. "
+            f"They come from running decision_engine.py, which writes {store.suggested_path.name}.",
+        )
+    return play
+
+
+@app.get("/suggested", summary="Plays that have a suggested play, with the model's reason")
+def list_suggested():
+    return {"plays": [
+        {
+            "playId": pid,
+            "decision": p["recommendation"]["decision"],
+            "targetNflId": p["recommendation"]["targetNflId"],
+            "reason": p["recommendation"]["reason"],
+        }
+        for pid, p in sorted(store.suggested.items())
+    ]}
+
+
+@app.get("/plays/{play_id}/compare", summary="The real play and the model's versions, in one response")
 def compare(play_id: str):
-    """Both plays in one call, for drawing them side by side. `optimal` is null and
-    `hasOptimal` false when the model has not produced a version of this play.
-    `recommendation` is the model's verdict when one exists, else null."""
+    """Everything about one play in one call, for drawing them side by side.
+
+    - `current`: the recorded play, or null if it was not exported.
+    - `suggested`: the model's suggested play with ball, events, start frame and
+      reason (see /plays/{id}/suggested), or null.
+    - `optimal`: the whatif command's forecast of the play (see /plays/{id}/optimal), or null.
+    - `recommendation`: the model's verdict in the roles.md shape, or null.
+
+    404 only when the API knows nothing about the play at all."""
     play_id = _strip_json(play_id)
     current = store.play_path(play_id)
-    if current is None:
-        raise HTTPException(404, f"Play '{play_id}' not found")
     optimal = store.optimal_path(play_id)
+    suggested = store.suggested.get(play_id)
     report = store.report(play_id)
+    if current is None and suggested is None:
+        raise HTTPException(404, f"Play '{play_id}' not found")
     return {
         "playId": play_id,
+        "hasCurrent": current is not None,
+        "hasSuggested": suggested is not None,
         "hasOptimal": optimal is not None,
-        "current": _read(current),
+        "current": _read(current) if current else None,
+        "suggested": suggested,
         "optimal": _read(optimal) if optimal else None,
         "recommendation": from_report(report).to_json() if report else None,
     }

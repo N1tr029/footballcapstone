@@ -14,6 +14,14 @@ dist/
 data/**
 !data/.gitkeep
 
+# ...and the same for a package's own data directory. The rule above has a slash
+# in it, so git anchors it to this file's directory and it covers /data only --
+# packages/counterfactual/data was never matched by it, and 919 MB of Kaggle
+# tracking CSV went in through that gap. Already-tracked files are unaffected by
+# an ignore rule; this is about the next one.
+packages/*/data/**
+apps/*/data/**
+
 # ...except the clip specs. They are not data: they are the tuned configuration a
 # clip took hours to arrive at — the window, the snap, the detector settings and a
 # checked homography that the vision model is not asked for twice. Ignoring them

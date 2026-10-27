@@ -352,7 +352,8 @@ def to_yolo_tiled(
         log(f"  WARNING: held-out {thin} — too few balls to measure against.")
 
     rng = random.Random(seed)
-    counts = {"train": 0, "val": 0, "boxes": 0, "skipped_partial": 0, "unreadable": 0}
+    counts = {"train": 0, "val": 0, "train_boxes": 0, "val_boxes": 0,
+              "skipped_partial": 0, "unreadable": 0}
 
     def write(split: str, stem: str, img, box: tuple[float, float, float] | None) -> None:
         images = out_dir / "images" / split
@@ -365,7 +366,7 @@ def to_yolo_tiled(
             bx, by, bs = box
             h, w = img.shape[:2]
             lines.append(f"0 {bx / w:.6f} {by / h:.6f} {bs / w:.6f} {bs / h:.6f}")
-            counts["boxes"] += 1
+            counts[f"{split}_boxes"] += 1
         (texts / f"{stem}.txt").write_text("\n".join(lines) + "\n")
         counts[split] += 1
 
@@ -447,8 +448,9 @@ def to_yolo_tiled(
         f"val: images/val\n"
         f"names:\n  0: football\n"
     )
-    log(f"  tiles {tile}px — train {counts['train']} ({counts['boxes']} boxes), "
-        f"val {counts['val']} ({', '.join(sorted(val_clips)) or 'none held out'}), "
+    log(f"  tiles {tile}px — train {counts['train']} ({counts['train_boxes']} boxes), "
+        f"val {counts['val']} ({counts['val_boxes']} boxes"
+        f"{', ' + ', '.join(sorted(val_clips)) if val_clips else ', none held out'}), "
         f"{counts['skipped_partial']} partial tiles skipped")
     return yaml
 

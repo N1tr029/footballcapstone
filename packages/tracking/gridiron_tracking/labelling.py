@@ -35,6 +35,7 @@ from typing import Any
 FRAME_DIR = Path("data/labels/frames")
 LABEL_FILE = Path("data/labels/labels.json")
 DATASET_DIR = Path("data/labels/dataset")
+TILED_DIR = Path("data/labels/dataset_tiled")
 WEIGHTS_DIR = Path("data/labels/weights")
 
 BOX_PIXELS = 22
@@ -109,6 +110,42 @@ class LabelSet:
         return (f"{c['labelled']} frames labelled — {c['with_a_ball']} with a ball, "
                 f"{c['without']} without")
 
+    def without_stale_repeats(self) -> tuple["LabelSet", dict[str, int]]:
+        """Drop labels that repeat the previous labelled frame's coordinates exactly.
+
+        The UI keeps the last click on screen while the frame advances, so pressing
+        next without clicking again saves the same point for a frame the ball has
+        already left. A ball at the *identical* subpixel coordinate two frames apart
+        is that, not a measurement: a real ball either moves or is occluded, and even
+        a stationary one jitters by a pixel under a hand-placed cursor.
+
+        Keeping the first of each run keeps the frame the click was actually made on
+        and drops the ones it drifted across. Measured on this set it removes 20 of
+        baker_kickoff's 26, which were a ball in flight recorded at one fixed point —
+        a box of grass a ball-width behind the ball, taught as the ball.
+
+        Not-visible labels are negatives and are never repeats.
+        """
+        kept: dict[str, Label] = {}
+        dropped: dict[str, int] = {}
+        by_clip: dict[str, list[tuple[int, str, Label]]] = {}
+        for key, label in self.labels.items():
+            clip, _, frame = key.rpartition("/")
+            by_clip.setdefault(clip, []).append((int(frame), key, label))
+        for clip, rows in by_clip.items():
+            last: tuple[float | None, float | None] | None = None
+            for _, key, label in sorted(rows):
+                if label.visible:
+                    here = (label.x, label.y)
+                    if here == last:
+                        dropped[clip] = dropped.get(clip, 0) + 1
+                        continue
+                    last = here
+                else:
+                    last = None
+                kept[key] = label
+        return LabelSet(kept), dropped
+
 
 # ------------------------------------------------------------------ extraction
 
@@ -172,6 +209,7 @@ def to_yolo(
     labels: LabelSet,
     out_dir: Path = DATASET_DIR,
     val_fraction: float = 0.2,
+    holdout: list[str] | None = None,
     log=print,
 ) -> Path:
     """Write a YOLO dataset and return the path to its data.yaml.
@@ -193,8 +231,23 @@ def to_yolo(
         raise ValueError("nothing labelled yet")
 
     clips = sorted({s.clip for s, _ in usable})
-    n_val = max(1, round(len(clips) * val_fraction)) if len(clips) > 1 else 0
-    val_clips = set(clips[-n_val:]) if n_val else set()
+    if holdout:
+        val_clips = {c for c in holdout if c in clips}
+        missing = set(holdout) - val_clips
+        if missing:
+            raise ValueError(f"nothing labelled for {sorted(missing)}")
+    else:
+        n_val = max(1, round(len(clips) * val_fraction)) if len(clips) > 1 else 0
+        val_clips = set(clips[-n_val:]) if n_val else set()
+
+    # A held-out clip with almost no ball in it cannot measure anything: a model
+    # that predicts nothing at all scores well on it. Say so rather than reporting
+    # a number that means nothing.
+    positives = {c: sum(1 for s, l in usable if s.clip == c and l.visible) for c in clips}
+    thin = {c: positives[c] for c in val_clips if positives[c] < 5}
+    if thin:
+        log(f"  WARNING: held-out {thin} — too few balls to measure against. "
+            f"Pass holdout= to choose a clip with more.")
 
     counts = {"train": 0, "val": 0, "boxes": 0}
     for shot, label in usable:
@@ -235,6 +288,158 @@ def to_yolo(
     return yaml
 
 
+def to_yolo_tiled(
+    shots: list[Shot],
+    labels: LabelSet,
+    out_dir: Path = TILED_DIR,
+    tile: int = 640,
+    holdout: list[str] | None = None,
+    crops_per_ball: int = 4,
+    negatives_per_frame: int = 2,
+    seed: int = 0,
+    log=print,
+) -> Path:
+    """Write a YOLO dataset of native-resolution crops instead of whole frames.
+
+    **Why this exists.** Training on whole frames resized to the model's input is
+    what the first fine-tune did, and it is a scale mismatch with how the ball is
+    actually looked for. A 1920x1080 frame at ``imgsz 960`` halves everything, so a
+    twelve-pixel ball arrives as six pixels — at or under the floor of a stride-8
+    detection head. Inference does the opposite: ``detect/yolo.py`` cuts the frame
+    into tiles and *magnifies* each one, so the ball it is asked about is two to
+    three times larger than any ball the model was trained on. It scored
+    mAP50 0.107 at the size it was trained at and 0.001 at the size it is used at,
+    which is that mismatch and not a fact about footballs.
+
+    Cropping at native resolution removes the resize from training: the ball is the
+    same handful of pixels it is in the source, and a 640 tile shown to a 1280-input
+    model is magnified the way a tile is at inference.
+
+    Training crops are centred near the ball with jitter, so it is seen against
+    different backgrounds and at different offsets rather than always in the middle.
+    Held-out clips are cut on a fixed overlapping grid instead — that is the sweep
+    inference performs, and a score over it is a score over the real task.
+
+    A tile holding only *part* of the ball is written for neither: it is not a
+    negative, and teaching a clipped box is how a detector learns half a ball. The
+    grid overlaps by half a tile so every ball falls whole inside at least one.
+    """
+    import random
+    import shutil
+
+    try:
+        import cv2
+    except ImportError as e:  # pragma: no cover
+        raise ImportError("tiling needs opencv") from e
+
+    out_dir = Path(out_dir)
+    if out_dir.exists():
+        shutil.rmtree(out_dir)
+
+    by_key = {s.key: s for s in shots}
+    usable = [(by_key[k], v) for k, v in labels.labels.items() if k in by_key]
+    if not usable:
+        raise ValueError("nothing labelled yet")
+
+    clips = sorted({s.clip for s, _ in usable})
+    val_clips = set(holdout or []) & set(clips)
+    if holdout and not val_clips:
+        raise ValueError(f"nothing labelled for {sorted(holdout)}")
+    positives = {c: sum(1 for s, l in usable if s.clip == c and l.visible) for c in clips}
+    thin = {c: positives[c] for c in val_clips if positives[c] < 5}
+    if thin:
+        log(f"  WARNING: held-out {thin} — too few balls to measure against.")
+
+    rng = random.Random(seed)
+    counts = {"train": 0, "val": 0, "boxes": 0, "skipped_partial": 0}
+
+    def write(split: str, stem: str, img, box: tuple[float, float, float] | None) -> None:
+        images = out_dir / "images" / split
+        texts = out_dir / "labels" / split
+        images.mkdir(parents=True, exist_ok=True)
+        texts.mkdir(parents=True, exist_ok=True)
+        cv2.imwrite(str(images / f"{stem}.jpg"), img, [cv2.IMWRITE_JPEG_QUALITY, 95])
+        lines = []
+        if box is not None:
+            bx, by, bs = box
+            h, w = img.shape[:2]
+            lines.append(f"0 {bx / w:.6f} {by / h:.6f} {bs / w:.6f} {bs / h:.6f}")
+            counts["boxes"] += 1
+        (texts / f"{stem}.txt").write_text("\n".join(lines) + "\n")
+        counts[split] += 1
+
+    def crop(img, ox: int, oy: int):
+        return img[oy:oy + tile, ox:ox + tile]
+
+    for shot, label in sorted(usable, key=lambda sl: sl[0].key):
+        split = "val" if shot.clip in val_clips else "train"
+        img = cv2.imread(shot.path)
+        if img is None:
+            continue
+        h, w = img.shape[:2]
+        if h < tile or w < tile:
+            continue
+        half = label.size / 2.0
+        stem = f"{shot.clip}_{shot.frame:05d}"
+
+        if split == "val":
+            # The sweep inference performs: a fixed grid, overlapping by half a tile
+            # so a ball on a seam still lands whole inside a neighbour.
+            step = tile // 2
+            xs = sorted({min(x, w - tile) for x in range(0, w, step)})
+            ys = sorted({min(y, h - tile) for y in range(0, h, step)})
+            for ox in xs:
+                for oy in ys:
+                    box = None
+                    if label.visible:
+                        inside_whole = (ox + half <= label.x <= ox + tile - half
+                                        and oy + half <= label.y <= oy + tile - half)
+                        touches = (ox - half < label.x < ox + tile + half
+                                   and oy - half < label.y < oy + tile + half)
+                        if inside_whole:
+                            box = (label.x - ox, label.y - oy, label.size)
+                        elif touches:
+                            counts["skipped_partial"] += 1
+                            continue
+                    write("val", f"{stem}_{ox}_{oy}", crop(img, ox, oy), box)
+            continue
+
+        if label.visible:
+            for n in range(crops_per_ball):
+                lo_x = max(0, int(label.x + half - tile))
+                hi_x = min(w - tile, int(label.x - half))
+                lo_y = max(0, int(label.y + half - tile))
+                hi_y = min(h - tile, int(label.y - half))
+                if lo_x > hi_x or lo_y > hi_y:
+                    break
+                ox = rng.randint(lo_x, hi_x)
+                oy = rng.randint(lo_y, hi_y)
+                write("train", f"{stem}_p{n}", crop(img, ox, oy),
+                      (label.x - ox, label.y - oy, label.size))
+
+        for n in range(negatives_per_frame):
+            for _ in range(20):
+                ox = rng.randint(0, w - tile)
+                oy = rng.randint(0, h - tile)
+                if label.visible and (ox - half < label.x < ox + tile + half
+                                      and oy - half < label.y < oy + tile + half):
+                    continue
+                write("train", f"{stem}_n{n}", crop(img, ox, oy), None)
+                break
+
+    yaml = out_dir / "data.yaml"
+    yaml.write_text(
+        f"path: {out_dir.resolve()}\n"
+        f"train: images/train\n"
+        f"val: images/val\n"
+        f"names:\n  0: football\n"
+    )
+    log(f"  tiles {tile}px — train {counts['train']} ({counts['boxes']} boxes), "
+        f"val {counts['val']} ({', '.join(sorted(val_clips)) or 'none held out'}), "
+        f"{counts['skipped_partial']} partial tiles skipped")
+    return yaml
+
+
 def train(
     data_yaml: Path,
     base_weights: str = "yolo11n.pt",
@@ -252,7 +457,12 @@ def train(
     """
     from ultralytics import YOLO
 
-    out_dir = Path(out_dir)
+    # Resolved, because ultralytics treats a *relative* project path as relative to
+    # its own runs directory rather than to the caller: the first fine-tune asked
+    # for data/labels/weights and the weights landed in
+    # runs/detect/data/labels/weights, so the path this returns — and the one the
+    # README tells you to point a clip at — did not exist.
+    out_dir = Path(out_dir).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
     model = YOLO(base_weights)
     model.train(data=str(data_yaml), epochs=epochs, imgsz=imgsz,

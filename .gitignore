@@ -37,6 +37,11 @@ data/**
 # Model weights
 *.pt
 
+# Ultralytics' own output directory. It appears when a training run is given a
+# relative project path — see labelling.train, which resolves its own — and it is
+# training output either way, not source.
+runs/
+
 # Coverage
 .coverage
 htmlcov/

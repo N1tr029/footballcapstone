@@ -59,6 +59,22 @@ block. **Read `provenance` before trusting any of it.**
 
 Any public NGS release works as the `--csv`; column spellings are resolved by alias.
 
+**Where to get one, without an account.** The release every number below is measured
+on is published openly by the NFL — no Kaggle sign-in, no competition entry:
+
+```bash
+mkdir -p data/bdb2017 && cd data/bdb2017
+for f in tracking_gameId_2017090700.csv plays.csv games.csv players.csv; do
+  curl -LO "https://raw.githubusercontent.com/nfl-football-ops/Big-Data-Bowl/master/Data/$f"
+done
+```
+
+30 MB, 177 plays, and it carries the three things the newer competition files do
+not: an `event` column, a `dis` column, and real per-frame football rows. The
+2026 competition release loads fine through the same aliases but cannot drive the
+benchmark — it has `ball_land_x`/`ball_land_y`, where the ball came down, and no
+record of where it was on the way.
+
 ## How accuracy is measured
 
 Real tracking → virtual camera → boxes → the pipeline → scored against the tracking
@@ -302,15 +318,27 @@ Then point a clip at the result and **measure it the same way**:
 
 ```jsonc
 "track": { "ball": true, "ball_weights": "data/labels/weights/football/weights/best.pt",
-           "ball_class": 0, "ball_imgsz": 1280, "ball_tiles": 3 }
+           "ball_class": 0, "ball_imgsz": 640, "ball_tiles": 3 }
 ```
 
-`ball_tiles: 3` over a 1920-wide frame cuts 640-wide tiles, and `ball_imgsz: 1280`
-magnifies each one twice — which is the tile size and the magnification the model
-was trained at. Match them if you change either; the whole point of the tiled
-dataset is that the ball reaches the model at one consistent size, and setting
-these two independently of training is how the first fine-tune came to score 0.001
-at the size it was being used at.
+**These two numbers are not free.** `ball_tiles: 3` over a 1920-wide frame cuts
+640-wide tiles, and `ball_imgsz: 640` hands each one to the model unscaled — which
+is the tile size and the magnification `train-ball` used, so the ball arrives the
+size it was learned at.
+
+The rule is `ball_imgsz` = the `--imgsz` the weights were trained with, and
+`ball_tiles` chosen so a tile is the `--tile` they were trained with. Change one
+and you must change the other. Reading them off `args.yaml` beside the weights is
+the reliable way:
+
+```bash
+grep -E "^(imgsz|model):" data/labels/weights/football/args.yaml
+```
+
+Getting this wrong is not a small miscalibration. The same weights score mAP50
+0.107 at the size they were trained at and 0.001 two sizes up — setting these
+independently of training is exactly how the first fine-tune came to look
+worthless at the size it was being used at.
 
 Read `travelled_yards` beside `measured_fraction`. A detection rate alone has looked
 like progress twice on this task and been furniture both times.

@@ -564,7 +564,7 @@ def _merge_ball(track: PlayTrack, ball, log) -> None:
         s = ball.at(f.t)
         if s is None or s.source == "none":
             continue
-        f.ball = Ball(x=float(s.x), y=float(s.y))
+        f.ball = Ball(x=float(s.x), y=float(s.y), source=s.source)
         written += 1
 
     measured = counts.get("detected", 0)

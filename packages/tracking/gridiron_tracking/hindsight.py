@@ -273,6 +273,13 @@ def to_play_json(
         }
         if f.ball is not None:
             frame["ball"] = {"x": round(f.ball.x, 2), "y": round(f.ball.y, 2), "s": 0.0}
+            if f.ball.source is not None:
+                # Same reasoning as oSource above, and the same field the API uses
+                # for a ball it got from the play model, so a client has one place
+                # to look whatever produced the play: a ball measured off footage
+                # and one interpolated between two people are both a position, and
+                # only this says which. See contract.Ball.
+                frame["ball"]["dataOrigin"] = f.ball.source
         frames.append(frame)
 
     doc: dict[str, Any] = {

@@ -6,9 +6,11 @@ should have been called, and what would have happened.
 Two things live here.
 
 **`decision_engine.py`** trains x/y next-frame regressors on the NFL Big Data Bowl
-2025 full-play tracking release. At each `pass_forward` frame it predicts a
+2025 full-play tracking release. At each `pass_arrived` frame it predicts a
 location for every tracked player and writes the original tracking columns to
-`reports/player_locations_2025.csv`, alongside a typed per-play review.
+`reports/player_locations_2025.csv`, alongside typed per-play and frontend
+suggested-play exports. Alternatives are restricted to WR/TE/RB/FB using
+`players.csv` joined by `nflId`.
 
 **`gridiron_counterfactual/`** is the part that connects it to everything else. The
 prototype speaks the competition's dialect — its column names, its coordinates, its
@@ -116,15 +118,16 @@ adapter remains a separate bridge and expects its existing model bundle/schema.
    If you don't activate the environment, use `.venv/bin/python` in place of
    `python` for the install and run commands.
 
-   The script saves the model, one predicted location row per player at pass
-   release in `reports/player_locations_2025.csv`, a per-play `decisions.csv`,
-   and full typed reports in `reports/decisions.jsonl`. Use `--locations-output`
-   and `--model-output` to choose other destinations. `--weeks` and `--max-games`
+   The script saves the model, one predicted location row per player at ball
+   arrival in `reports/player_locations_2025.csv`, per-play `decisions.csv` and
+   `decisions.jsonl`, and frontend `suggested_plays.jsonl` plus CSV. Use
+   `--locations-output`, `--suggested-output`, and `--model-output` to choose
+   other destinations. `--weeks` and `--max-games`
    control which data is loaded and which games train the model.
 
 ## What the prototype says
 
-For each pass, the model predicts every player's x/y at the `pass_forward` frame.
+For each pass, the model predicts every player's x/y at the `pass_arrived` frame.
 The separate review measures each offensive player's distance to the nearest
 defender using those predicted positions and compares the intended receiver with
 other offensive players. If another player is at least 1.5 yards more separated,
@@ -147,14 +150,14 @@ have thrown elsewhere” answer.
 ### Player coverage
 
 The 2025 release's `tracking_week_N.csv` files contain player locations across
-the play. The model forecasts every player row present at pass release, retaining
+the play. The model forecasts every player row present at pass arrival, retaining
 the source columns in its CSV. Players absent from the tracking frame cannot be
 forecast from this dataset.
 
 ## Files
 
 - `decision_engine.py` — train on 2025 tracking, emit per-player predicted
-  pass-release locations, and write typed per-play suggestions.
+  pass-arrival locations, and write typed per-play and frontend suggestions.
 - `requirements.txt` — minimal Python dependencies.
 - `data/`, `models/`, and `reports/` — local Kaggle data and generated outputs;
   these are excluded from version control.

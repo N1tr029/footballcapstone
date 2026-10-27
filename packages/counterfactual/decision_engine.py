@@ -1,7 +1,7 @@
 """NFL Big Data Bowl 2025 full-field tracking decision review.
 
 The 2025 release uses tracking_week_N.csv and records the full tracked play. This
-workflow uses the measured positions at pass release and includes every player
+workflow uses modeled positions at pass arrival and includes every player
 present in the tracking file when measuring receiver separation.
 """
 
@@ -65,27 +65,26 @@ def train_2025_location_model(tracking: pd.DataFrame, max_games: int = 4):
             "training_games": [int(g) for g in games], "training_rows": int(len(pairs))}
 
 
-def predict_2025_pass_release_locations(tracking: pd.DataFrame, bundle: dict,
-                                        game_ids: set | None = None) -> pd.DataFrame:
-    """Predict every tracked player's x/y at pass release, preserving source fields."""
+def predict_2025_event_locations(tracking: pd.DataFrame, bundle: dict,
+                                 game_ids: set | None = None) -> pd.DataFrame:
+    """Predict every tracked player's x/y at an event frame, preserving fields."""
     original_columns = list(tracking.columns)
     data = tracking.copy()
     data["_frame_num"] = pd.to_numeric(data.frameId, errors="coerce")
-    releases = data[data.event.fillna("").astype(str).str.lower().str.replace(" ", "_").str.contains("pass_forward|passforward", regex=True)]
     if game_ids is not None:
-        releases = releases[releases.gameId.isin(game_ids)]
-    releases = releases.sort_values(["gameId", "playId", "frameId"]).groupby(["gameId", "playId"], as_index=False).first()
-    if releases.empty:
+        data = data[data.gameId.isin(game_ids)].copy()
+    events = data[data.event.fillna("").astype(str).str.lower().str.replace(" ", "_").eq("pass_arrived")]
+    events = events.sort_values(["gameId", "playId", "frameId"]).groupby(["gameId", "playId"], as_index=False).first()
+    if events.empty:
         return pd.DataFrame(columns=original_columns)
-    # A many-to-many merge via the release frame list selects all player rows at
-    # release, then joins each player's frame-1 observation.
-    player_releases = data[data[["gameId", "playId", "_frame_num"]].apply(tuple, axis=1).isin(
-        set(releases[["gameId", "playId", "_frame_num"]].apply(tuple, axis=1)))].copy()
+    # Select every player row at arrival, then join each player's prior frame.
+    event_keys = events[["gameId", "playId", "_frame_num"]].drop_duplicates()
+    player_arrivals = data.merge(event_keys, on=["gameId", "playId", "_frame_num"], how="inner")
     keys = ["gameId", "playId", "nflId"]
     prev = data[[*keys, "_frame_num", "x", "y", "s", "a", "dis", "o", "dir", "playDirection"]].copy()
     prev["_frame_num"] += 1
     prev = prev.rename(columns={c: f"prev_{c}" for c in prev.columns if c not in keys + ["_frame_num"]})
-    scored = player_releases.merge(prev, on=keys + ["_frame_num"], how="left", suffixes=("", "_lag"))
+    scored = player_arrivals.merge(prev, on=keys + ["_frame_num"], how="left", suffixes=("", "_lag"))
     # Coordinates are predicted only where a true preceding observation exists.
     for c in ("prev_x", "prev_y", "prev_s", "prev_a", "prev_dis", "prev_o", "prev_dir"):
         scored[c] = pd.to_numeric(scored.get(c), errors="coerce")
@@ -119,8 +118,9 @@ def read_2025_weeks(data_dir: Path, weeks: list[int]) -> tuple[pd.DataFrame, pd.
 
 
 def analyze_2025(tracking: pd.DataFrame, plays: pd.DataFrame, player_play: pd.DataFrame,
-                 max_games: int = 4, predicted_locations: pd.DataFrame | None = None) -> list[dict]:
-    """Review pass plays using modeled player locations at pass release."""
+                 max_games: int = 4, predicted_locations: pd.DataFrame | None = None,
+                 players: pd.DataFrame | None = None) -> list[dict]:
+    """Review pass plays using modeled player locations when the ball arrives."""
     aliases = {"gameId": "game_id", "playId": "play_id", "nflId": "nfl_id",
                "frameId": "frame_id", "playDirection": "play_direction"}
     tracking = tracking.rename(columns=aliases).copy()
@@ -129,6 +129,10 @@ def analyze_2025(tracking: pd.DataFrame, plays: pd.DataFrame, player_play: pd.Da
                                   "yardsToGo": "yards_to_go", "playDescription": "play_description"}).copy()
     player_play = player_play.rename(columns={"gameId": "game_id", "playId": "play_id", "nflId": "nfl_id",
                                                "wasTargettedReceiver": "was_targeted_receiver"}).copy()
+    if players is not None:
+        roster = players.rename(columns={"nflId": "nfl_id", "position": "player_position"})
+        tracking = tracking.merge(roster[["nfl_id", "player_position"]].drop_duplicates("nfl_id"),
+                                  on="nfl_id", how="left")
     modeled = None
     if predicted_locations is not None and not predicted_locations.empty:
         modeled = predicted_locations.rename(columns={"gameId": "game_id", "playId": "play_id",
@@ -149,16 +153,16 @@ def analyze_2025(tracking: pd.DataFrame, plays: pd.DataFrame, player_play: pd.Da
     for (game_id, play_id), play in tracking.groupby(["game_id", "play_id"], sort=False):
         # The full-play tracking sequence has a pass_forward event. If absent, skip
         # rather than silently using the end of the play as the decision moment.
-        releases = play[play.event_norm.str.contains("pass_forward|passforward", regex=True)]
-        if releases.empty:
+        arrivals = play[play.event_norm.eq("pass_arrived")]
+        if arrivals.empty:
             continue
-        release_frame = pd.to_numeric(releases.frame_id, errors="coerce").min()
-        frame = play[pd.to_numeric(play.frame_id, errors="coerce").eq(release_frame)].copy()
+        arrival_frame = pd.to_numeric(arrivals.frame_id, errors="coerce").min()
+        frame = play[pd.to_numeric(play.frame_id, errors="coerce").eq(arrival_frame)].copy()
         if frame.empty:
             continue
         if modeled is not None:
             modeled_frame = modeled[(modeled.game_id == game_id) & (modeled.play_id == play_id)
-                                    & (pd.to_numeric(modeled.frame_id, errors="coerce") == release_frame)]
+                                    & (pd.to_numeric(modeled.frame_id, errors="coerce") == arrival_frame)]
             if not modeled_frame.empty:
                 position_map = modeled_frame.set_index("nfl_id")[["x", "y"]]
                 for axis in ("x", "y"):
@@ -184,8 +188,9 @@ def analyze_2025(tracking: pd.DataFrame, plays: pd.DataFrame, player_play: pd.Da
         offense["separation_yards"] = d.min(axis=1)
         receivers = offense[~offense.nfl_id.isin(target_ids)]
         position_col = next((c for c in ("player_position", "position") if c in receivers), None)
-        if position_col:
-            receivers = receivers[~receivers[position_col].astype(str).str.strip().str.upper().eq("QB")]
+        if position_col is None:
+            continue
+        receivers = receivers[receivers[position_col].astype(str).str.strip().str.upper().isin({"WR", "TE", "RB", "FB"})]
         target = offense[offense.nfl_id.isin(target_ids)]
         if target.empty:
             continue
@@ -196,21 +201,21 @@ def analyze_2025(tracking: pd.DataFrame, plays: pd.DataFrame, player_play: pd.Da
         alt_sep = float(best.separation_yards) if best is not None else None
         gain = alt_sep - actual_sep if alt_sep is not None else None
         if gain is not None and gain >= 1.5:
-            choice, status = "consider_alternative", "measured_alternative_more_open_at_release"
+            choice, status = "consider_alternative", "measured_alternative_more_open_at_arrival"
         else:
-            choice, status = "target_was_reasonable", "no_clear_measured_improvement_at_release"
+            choice, status = "target_was_reasonable", "no_clear_measured_improvement_at_arrival"
         report = {
             "game_id": int(game_id), "play_id": int(play_id), "decision": choice, "status": status,
             "probabilities": {"target_was_reasonable": 0.3, "consider_alternative": 0.7} if choice == "consider_alternative" else {"target_was_reasonable": 0.7, "consider_alternative": 0.3},
             "confidence": "moderate" if len(alternatives) >= 3 else "low",
             "evidence": {"targeted_receiver_id": int(actual.nfl_id), "tracked_player_count": int(len(frame)),
                          "roster_complete": len(frame) >= 22, "roster_coverage": "all_players_in_2025_tracking_frame",
-                         "decision_frame_id": int(release_frame), "targeted_receiver_separation_yards": round(actual_sep, 2),
+                         "decision_frame_id": int(arrival_frame), "targeted_receiver_separation_yards": round(actual_sep, 2),
                          "best_alternative_receiver_id": int(best.nfl_id) if best is not None else None,
                          "best_alternative_separation_yards": round(alt_sep, 2) if alt_sep is not None else None,
                          "alternative_separation_advantage_yards": round(gain, 2) if gain is not None else None,
-                         "measurement": "nearest-defender distance using model-predicted pass_forward locations"},
-            "caveat": "Retrospective geometric comparison at pass release using next-frame predictions trained on 2025 tracking. Separation alone does not model quarterback reads, throw difficulty, coverage responsibility, or catch probability."
+                         "measurement": "nearest-defender distance using model-predicted pass_arrived locations"},
+            "caveat": "Retrospective geometric comparison at ball arrival using next-frame predictions trained on 2025 tracking. Separation alone does not model quarterback reads, throw difficulty, coverage responsibility, or catch probability."
         }
         for col in ("play_description", "down", "yards_to_go", "absolute_yardline_number"):
             if ctx is not None and col in ctx and pd.notna(ctx[col]):
@@ -317,7 +322,7 @@ def decisions(state: pd.DataFrame, predictions: pd.DataFrame, data_dir: Path) ->
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Train on NFL Big Data Bowl 2025 tracking and predict every player's pass-release location.")
+    parser = argparse.ArgumentParser(description="Train on NFL Big Data Bowl 2025 tracking and predict every player's pass-arrival location.")
     package_data_dir = Path(__file__).resolve().parent / "data"
     repository_data_dir = Path(__file__).resolve().parents[2] / "data" / "kaggle" / "big-data-bowl-data"
     default_data_dir = package_data_dir if list(package_data_dir.glob("**/tracking_week_1.csv")) else repository_data_dir
@@ -326,23 +331,31 @@ def main():
     parser.add_argument("--weeks", type=int, nargs="+", default=[1], help="2025 tracking weeks to use, e.g. --weeks 1 2")
     parser.add_argument("--max-games", type=int, default=4, help="Review plays from this many games")
     parser.add_argument("--game-id", type=int, help="Show only this game (it must be included in the selected weeks/games)")
-    parser.add_argument("--output", type=Path, default=Path("reports/decisions.jsonl"), help="Decision report output (JSONL; CSV uses the same stem)")
-    parser.add_argument("--locations-output", type=Path, default=Path("reports/player_locations_2025.csv"),
-                        help="Predicted pass-release rows, with the same columns as tracking_week_N.csv")
-    parser.add_argument("--model-output", type=Path, default=Path("models/location_model_2025.joblib"))
+    report_dir = Path(__file__).resolve().parent / "reports"
+    model_dir = Path(__file__).resolve().parent / "models"
+    parser.add_argument("--output", type=Path, default=report_dir / "decisions.jsonl", help="Decision report output (JSONL; CSV uses the same stem)")
+    parser.add_argument("--locations-output", type=Path, default=report_dir / "player_locations_2025.csv",
+                        help="Predicted pass-arrival rows, with the same columns as tracking_week_N.csv")
+    parser.add_argument("--suggested-output", type=Path, default=report_dir / "suggested_plays.jsonl",
+                        help="Suggested-play export for the frontend (CSV uses the same stem)")
+    parser.add_argument("--model-output", type=Path, default=model_dir / "location_model_2025.joblib")
     args = parser.parse_args()
     tracking, plays, player_play = read_2025_weeks(args.data_dir, args.weeks)
+    players_path = next(iter(args.data_dir.glob("**/players.csv")), None)
+    if players_path is None:
+        raise FileNotFoundError(f"Could not find players.csv under {args.data_dir}; it is required to filter receiver positions.")
+    players = pd.read_csv(players_path, low_memory=False)
     bundle = train_2025_location_model(tracking, args.max_games)
     args.model_output.parent.mkdir(parents=True, exist_ok=True)
     joblib.dump(bundle, args.model_output)
     selected_training_games = set(bundle["training_games"])
-    predicted_locations = predict_2025_pass_release_locations(tracking, bundle, selected_training_games)
+    predicted_locations = predict_2025_event_locations(tracking, bundle, selected_training_games)
     args.locations_output.parent.mkdir(parents=True, exist_ok=True)
     predicted_locations.to_csv(args.locations_output, index=False)
-    reports = analyze_2025(tracking, plays, player_play, args.max_games, predicted_locations)
+    reports = analyze_2025(tracking, plays, player_play, args.max_games, predicted_locations, players)
     selected_game = args.game_id if args.game_id is not None else (min(r["game_id"] for r in reports) if reports else None)
     if selected_game is None:
-        raise ValueError("No pass_forward plays were found in the selected 2025 tracking weeks.")
+        raise ValueError("No pass_arrived plays were found in the selected 2025 tracking weeks.")
     reports = [row for row in reports if row["game_id"] == selected_game]
     if not reports:
         available = sorted({int(g) for g in tracking.gameId.unique()})
@@ -352,12 +365,56 @@ def main():
     csv_path = args.output.with_suffix(".csv")
     display = pd.DataFrame([{**{k: v for k, v in row.items() if k != "evidence"}, **row["evidence"]} for row in reports])
     display.to_csv(csv_path, index=False)
+    report_by_play = {(r["game_id"], r["play_id"]): r for r in reports}
+    export = predicted_locations.rename(columns={"gameId": "game_id", "playId": "play_id", "nflId": "nfl_id",
+                                                "frameId": "frame_id", "displayName": "player_name",
+                                                "playDirection": "play_direction"}).copy()
+    roster = players.rename(columns={"nflId": "nfl_id", "position": "player_position"})
+    export = export.merge(roster[["nfl_id", "player_position", "displayName"]].drop_duplicates("nfl_id"), on="nfl_id", how="left")
+    export["recommended_target_nfl_id"] = export.apply(
+        lambda row: (report_by_play.get((row.game_id, row.play_id), {}).get("evidence", {}).get("best_alternative_receiver_id")
+                     if report_by_play.get((row.game_id, row.play_id), {}).get("decision") == "consider_alternative"
+                     else report_by_play.get((row.game_id, row.play_id), {}).get("evidence", {}).get("targeted_receiver_id")), axis=1)
+    export["decision"] = export.apply(lambda row: report_by_play.get((row.game_id, row.play_id), {}).get("decision"), axis=1)
+    def recommendation_reason(row):
+        report = report_by_play.get((row.game_id, row.play_id), {})
+        evidence = report.get("evidence", {})
+        if report.get("decision") == "consider_alternative":
+            return (f"Receiver {evidence.get('best_alternative_receiver_id')} was projected to have "
+                    f"{evidence.get('alternative_separation_advantage_yards')} more yards of separation "
+                    "than the targeted receiver at ball arrival.")
+        return "No eligible alternative receiver had a clear separation advantage at ball arrival."
+    export["recommendation_reason"] = export.apply(recommendation_reason, axis=1)
+    export["record_type"] = "suggested_player"
+    suggested_csv = args.suggested_output.with_suffix(".csv")
+    args.suggested_output.parent.mkdir(parents=True, exist_ok=True)
+    export.to_csv(suggested_csv, index=False)
+    with args.suggested_output.open("w") as out:
+        for key, group in export.groupby(["game_id", "play_id"], sort=False):
+            report = report_by_play.get(key)
+            if report is None:
+                continue
+            frame_id = int(group.frame_id.iloc[0])
+            row = {"schema_version": 1, "game_id": int(key[0]), "play_id": int(key[1]),
+                   "play_start_frame_id": frame_id,
+                   "recommendation": {"decision": report["decision"],
+                                      "target_nfl_id": export.loc[group.index[0], "recommended_target_nfl_id"],
+                                      "recommended_target_nfl_id": export.loc[group.index[0], "recommended_target_nfl_id"],
+                                      "reason": report["caveat"], "evidence": report["evidence"]},
+                   "frames": [{"frame_id": frame_id,
+                               "players": group[group.nfl_id.notna()].to_dict(orient="records"),
+                               "ball": (None if group[group.nfl_id.isna()].empty else {
+                                   "x": group[group.nfl_id.isna()].iloc[0].get("x"),
+                                   "y": group[group.nfl_id.isna()].iloc[0].get("y"),
+                                   "data_origin": "model_prediction"})} ]}
+            out.write(json.dumps(row) + "\n")
     print(json.dumps({"data_release": "NFL Big Data Bowl 2025", "full_tracking_rows": int(len(tracking)),
                       "game_shown": int(selected_game), "plays_scored": len(reports),
                       "model_training_games": bundle["training_games"], "model_training_rows": bundle["training_rows"],
                       "predicted_player_location_rows": int(len(predicted_locations)),
                       "predicted_location_columns": list(predicted_locations.columns),
                       "model": str(args.model_output), "player_locations": str(args.locations_output),
+                      "suggested_plays": [str(args.suggested_output), str(suggested_csv)],
                       "reports": [str(args.output), str(csv_path)]}, indent=2))
     columns = [c for c in ("play_id", "decision", "down", "tracked_player_count", "targeted_receiver_separation_yards",
                             "best_alternative_separation_yards", "alternative_separation_advantage_yards")

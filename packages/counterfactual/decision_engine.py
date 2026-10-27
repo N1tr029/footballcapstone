@@ -123,7 +123,7 @@ def train(data_dir: Path, weeks: list[int], max_games: int, model_dir: Path):
     predicted = forecast_rows.copy()
     predicted["pred_x"] = models["x"].predict(predicted[cols])
     predicted["pred_y"] = models["y"].predict(predicted[cols])
-    return state, outputs, predicted, score, len(fit_rows), len(games)
+    return inputs, state, outputs, predicted, score, len(fit_rows), len(games)
 
 
 def decisions(state: pd.DataFrame, predictions: pd.DataFrame, data_dir: Path) -> list[dict]:
@@ -189,6 +189,16 @@ def decisions(state: pd.DataFrame, predictions: pd.DataFrame, data_dir: Path) ->
             },
             "caveat": "Retrospective tracking-based heuristic, not a causal estimate of the best throw; ignores QB pressure, timing, throw difficulty, coverage assignments, and catch skill."
         }
+        if best is not None and gain is not None and gain >= 1.5:
+            report["recommendation_reason"] = (
+                f"The model projects receiver {int(best.nfl_id)} to finish {gain:.1f} yards farther "
+                f"from the nearest defender than the actual target ({alt_sep:.1f} vs {actual_sep:.1f} yards)."
+            )
+        else:
+            report["recommendation_reason"] = (
+                "The model found no alternative receiver with a clear projected separation advantage; "
+                "the actual target is retained as the suggested target."
+            )
         if not supplementary.empty:
             context = supplementary[(supplementary.game_id == game_id) & (supplementary.play_id == play_id)]
             if not context.empty:
@@ -198,6 +208,182 @@ def decisions(state: pd.DataFrame, predictions: pd.DataFrame, data_dir: Path) ->
                         report[col] = play_context[col].item() if hasattr(play_context[col], "item") else play_context[col]
         reports.append(report)
     return reports
+
+
+def suggested_play_rows(inputs: pd.DataFrame, predictions: pd.DataFrame, reports: list[dict]) -> pd.DataFrame:
+    """Build replay-like records from the observed input and modeled future.
+
+    The competition data has player tracking only. Ball positions and event times
+    are explicitly labeled simulations/inferences, rather than presented as
+    measured tracking values.
+    """
+    report_by_play = {
+        (r["game_id"], r["play_id"]): r for r in reports
+        if "recommendation_reason" in r and r["decision"] in {"consider_alternative", "target_was_reasonable"}
+    }
+    output = []
+    tracked_columns = list(inputs.columns)
+    for (game_id, play_id), report in report_by_play.items():
+        observed = inputs[(inputs.game_id == game_id) & (inputs.play_id == play_id)].copy()
+        future = predictions[(predictions.game_id == game_id) & (predictions.play_id == play_id)].copy()
+        if observed.empty or future.empty:
+            continue
+        observed["record_type"] = "observed_player"
+        observed["event_name"] = ""
+        observed["ball_x"] = np.nan
+        observed["ball_y"] = np.nan
+        observed["data_origin"] = "recorded_input"
+        observed["source_frame_id"] = observed["frame_id"]
+        observed["play_start_frame_id"] = pd.to_numeric(observed["frame_id"]).min()
+        observed["recommendation_reason"] = report["recommendation_reason"]
+        observed["recommended_target_nfl_id"] = report.get("best_alternative_receiver_id") if report["decision"] == "consider_alternative" else report["evidence"].get("targeted_receiver_id")
+        output.append(observed)
+
+        # Keep the same tracking columns as the source data for Unity/import use.
+        last = observed.sort_values("frame_id").groupby("nfl_id", as_index=False).tail(1).set_index("nfl_id")
+        target_id = observed[observed.player_role.eq("Targeted Receiver")].nfl_id.iloc[0]
+        rec_id = report.get("best_alternative_receiver_id") if report["decision"] == "consider_alternative" else target_id
+        if rec_id not in last.index or rec_id is None:
+            rec_id = target_id
+        rec_future = future[future.nfl_id == rec_id].sort_values("frame_id")
+        if rec_future.empty:
+            continue
+        passer_rows = observed[observed.player_role.eq("Passer")].sort_values("frame_id")
+        passer = passer_rows.iloc[-1] if not passer_rows.empty else observed.sort_values("frame_id").iloc[-1]
+        max_input_frame = int(pd.to_numeric(observed.frame_id).max())
+        play_start_frame = int(pd.to_numeric(observed.frame_id).min())
+        max_future_horizon = int(pd.to_numeric(future.frame_id).max())
+        frames = []
+        for nfl_id, trajectory in future.sort_values("frame_id").groupby("nfl_id"):
+            if nfl_id not in last.index:
+                continue
+            base = last.loc[nfl_id]
+            for row in trajectory.itertuples(index=False):
+                d = {c: base.get(c, np.nan) for c in tracked_columns}
+                frame_id = max_input_frame + int(row.frame_id)
+                d.update(game_id=game_id, play_id=play_id, nfl_id=nfl_id, frame_id=frame_id,
+                         x=float(row.pred_x), y=float(row.pred_y), player_to_predict=False,
+                         record_type="simulated_player", event_name="", ball_x=np.nan, ball_y=np.nan,
+                         data_origin="model_prediction", source_frame_id=max_input_frame,
+                         play_start_frame_id=int(pd.to_numeric(observed.frame_id).min()),
+                         recommendation_reason=report["recommendation_reason"],
+                         recommended_target_nfl_id=rec_id)
+                frames.append(d)
+        future_rows = pd.DataFrame(frames)
+        if not future_rows.empty:
+            # Derive movement fields from the generated path instead of copying
+            # stale speed/direction values from the last observed frame.
+            for _, idx in future_rows.groupby("nfl_id").groups.items():
+                part = future_rows.loc[idx].sort_values("frame_id")
+                anchor = last.loc[part.nfl_id.iloc[0]]
+                x = np.r_[float(anchor.x), part.x.to_numpy(dtype=float)]
+                y = np.r_[float(anchor.y), part.y.to_numpy(dtype=float)]
+                dx, dy = np.diff(x), np.diff(y)
+                speed = np.hypot(dx, dy) * 10.0  # 10 Hz tracking
+                prior_speed = pd.to_numeric(pd.Series([anchor.get("s", 0)]), errors="coerce").fillna(0).iloc[0]
+                acceleration = np.r_[prior_speed, speed]
+                acceleration = np.diff(acceleration) * 10.0
+                future_rows.loc[part.index, "s"] = speed
+                future_rows.loc[part.index, "a"] = acceleration
+                future_rows.loc[part.index, "dir"] = np.degrees(np.arctan2(dx, dy)) % 360
+            output.append(future_rows)
+
+        # A straight interpolated flight is a visual placeholder; dataset has
+        # ball landing coordinates but no measured ball trajectory.
+        receiver_end = rec_future.iloc[-1]
+        event_specs = [(play_start_frame, "ball_snap", "inferred"),
+                       (max_input_frame + 1, "pass_forward", "inferred"),
+                       (max_input_frame + max_future_horizon, "pass_arrived", "simulated")]
+        for event_frame, event, origin in event_specs:
+            d = {c: np.nan for c in tracked_columns}
+            d.update(game_id=game_id, play_id=play_id, frame_id=event_frame,
+                     record_type="event", event_name=event, data_origin=origin,
+                     source_frame_id=max_input_frame, play_start_frame_id=int(pd.to_numeric(observed.frame_id).min()),
+                     recommendation_reason=report["recommendation_reason"],
+                     recommended_target_nfl_id=rec_id)
+            output.append(pd.DataFrame([d]))
+        for step in range(1, max_future_horizon + 1):
+            t = step / max_future_horizon
+            d = {c: np.nan for c in tracked_columns}
+            d.update(game_id=game_id, play_id=play_id, frame_id=max_input_frame + step,
+                     nfl_id=0, player_name="Football", player_role="Ball", record_type="simulated_ball",
+                     event_name="", ball_x=float(passer.x + (receiver_end.pred_x - passer.x) * t),
+                     ball_y=float(passer.y + (receiver_end.pred_y - passer.y) * t),
+                     data_origin="simulated_straight_line", source_frame_id=max_input_frame,
+                     play_start_frame_id=int(pd.to_numeric(observed.frame_id).min()),
+                     recommendation_reason=report["recommendation_reason"], recommended_target_nfl_id=rec_id)
+            output.append(pd.DataFrame([d]))
+    return pd.concat(output, ignore_index=True, sort=False) if output else pd.DataFrame()
+
+
+def build_suggested_play_payload(
+    inputs: pd.DataFrame,
+    predictions: pd.DataFrame,
+    reports: list[dict],
+    game_id: int,
+    play_id: int,
+) -> dict:
+    """Return one suggested play as a JSON-ready object for an integration.
+
+    Call this after ``train`` and ``decisions`` when those results are already
+    available. Player records retain the source tracking fields; frame-level
+    events and ball coordinates are grouped into a Unity-friendly structure.
+    """
+    play_report = next((r for r in reports if int(r["game_id"]) == int(game_id)
+                        and int(r["play_id"]) == int(play_id)), None)
+    if play_report is None:
+        raise KeyError(f"No decision report for game_id={game_id}, play_id={play_id}")
+    rows = suggested_play_rows(inputs, predictions, [play_report])
+    if rows.empty:
+        raise ValueError(f"No suggested pass replay for game_id={game_id}, play_id={play_id}")
+
+    def clean(value):
+        if value is None:
+            return None
+        try:
+            if pd.isna(value):
+                return None
+        except (TypeError, ValueError):
+            pass
+        if hasattr(value, "item"):
+            return value.item()
+        return value
+
+    frames = []
+    for frame_id, group in rows.groupby("frame_id", sort=True, dropna=True):
+        player_rows = group[group.record_type.isin(["observed_player", "simulated_player"])]
+        ball_rows = group[group.record_type.eq("simulated_ball")]
+        event_rows = group[group.record_type.eq("event")]
+        players = []
+        for record in player_rows.to_dict(orient="records"):
+            players.append({key: clean(value) for key, value in record.items()
+                            if key not in {"ball_x", "ball_y", "event_name"}})
+        ball = None
+        if not ball_rows.empty:
+            b = ball_rows.iloc[0]
+            ball = {"x": clean(b.ball_x), "y": clean(b.ball_y),
+                    "nfl_id": clean(b.nfl_id), "data_origin": clean(b.data_origin)}
+        events = [{"name": clean(r.event_name), "data_origin": clean(r.data_origin)}
+                  for r in event_rows.itertuples(index=False)]
+        frames.append({"frame_id": int(frame_id), "players": players, "ball": ball, "events": events})
+
+    target_id = (play_report.get("best_alternative_receiver_id")
+                 if play_report["decision"] == "consider_alternative"
+                 else play_report.get("evidence", {}).get("targeted_receiver_id"))
+    return {
+        "schema_version": 1,
+        "game_id": int(game_id),
+        "play_id": int(play_id),
+        "play_start_frame_id": int(pd.to_numeric(rows.play_start_frame_id).min()),
+        "recommendation": {
+            "decision": play_report["decision"],
+            "target_nfl_id": clean(target_id),
+            "reason": play_report.get("recommendation_reason"),
+            "evidence": play_report.get("evidence", {}),
+            "caveat": play_report.get("caveat"),
+        },
+        "frames": frames,
+    }
 
 
 def running_play_reports(data_dir: Path) -> list[dict]:
@@ -263,8 +449,12 @@ def main():
     parser.add_argument("--max-games", type=int, default=4, help="Use only this many games for a quick prototype")
     parser.add_argument("--game-id", type=int, help="Show only this game in the report (it must be among the selected training games)")
     parser.add_argument("--output", type=Path, default=Path("reports/decisions.jsonl"))
+    parser.add_argument("--suggested-play-output", type=Path, default=Path("reports/suggested_plays.csv"),
+                        help="CSV containing observed frames plus simulated player, ball, and event records")
+    parser.add_argument("--suggested-play-jsonl", type=Path, default=Path("reports/suggested_plays.jsonl"),
+                        help="Structured JSONL: one suggested-play object per line")
     args = parser.parse_args()
-    state, _, preds, mae, nrows, ngames = train(args.data_dir, args.weeks, args.max_games, Path("models"))
+    inputs, state, _, preds, mae, nrows, ngames = train(args.data_dir, args.weeks, args.max_games, Path("models"))
     pass_reports = decisions(state, preds, args.data_dir)
     run_reports = running_play_reports(args.data_dir)
     if not list(args.data_dir.glob("**/play_by_play_2023.csv*")):
@@ -280,9 +470,23 @@ def main():
     csv_path = args.output.with_suffix(".csv")
     display = pd.DataFrame([{**{k: v for k, v in row.items() if k != "evidence"}, **row["evidence"]} for row in reports])
     display.to_csv(csv_path, index=False)
+    suggested = suggested_play_rows(inputs, preds, reports)
+    if not suggested.empty:
+        args.suggested_play_output.parent.mkdir(parents=True, exist_ok=True)
+        suggested.to_csv(args.suggested_play_output, index=False)
+    payloads = []
+    for row in reports:
+        if row.get("decision") not in {"consider_alternative", "target_was_reasonable"}:
+            continue
+        payloads.append(build_suggested_play_payload(
+            inputs, preds, reports, row["game_id"], row["play_id"]
+        ))
+    args.suggested_play_jsonl.parent.mkdir(parents=True, exist_ok=True)
+    args.suggested_play_jsonl.write_text("\n".join(json.dumps(payload, allow_nan=False) for payload in payloads) + ("\n" if payloads else ""))
     print(json.dumps({"trained_rows": nrows, "games_used": ngames, "heldout_coordinate_mae_yards": mae,
                       "game_shown": int(selected_game), "plays_scored": len(reports),
-                      "reports": [str(args.output), str(csv_path)]}, indent=2))
+                      "reports": [str(args.output), str(csv_path), str(args.suggested_play_output),
+                                  str(args.suggested_play_jsonl)]}, indent=2))
     columns = [c for c in ("play_id", "decision", "pass_result", "yards_gained", "targeted_receiver_predicted_separation_yards",
                             "best_alternative_predicted_separation_yards", "alternative_separation_advantage_yards")
                if c in display.columns]

@@ -174,7 +174,6 @@ def analyze_2025(tracking: pd.DataFrame, plays: pd.DataFrame, player_play: pd.Da
         offense = frame[frame.club.astype(str).str.upper().eq(possession.upper())]
         defense = frame[~frame.index.isin(offense.index)]
         target_ids = target_map.get((game_id, play_id), [])
-        receivers = offense[~offense.nfl_id.isin(target_ids)]
         # Include the quarterback/pass target fields where present, but only route
         # receivers are alternatives; all 22 tracked positions remain in evidence.
         if offense.empty or defense.empty or not target_ids:
@@ -184,6 +183,9 @@ def analyze_2025(tracking: pd.DataFrame, plays: pd.DataFrame, player_play: pd.Da
         offense = offense.copy()
         offense["separation_yards"] = d.min(axis=1)
         receivers = offense[~offense.nfl_id.isin(target_ids)]
+        position_col = next((c for c in ("player_position", "position") if c in receivers), None)
+        if position_col:
+            receivers = receivers[~receivers[position_col].astype(str).str.strip().str.upper().eq("QB")]
         target = offense[offense.nfl_id.isin(target_ids)]
         if target.empty:
             continue
@@ -223,11 +225,20 @@ def decisions(state: pd.DataFrame, predictions: pd.DataFrame, data_dir: Path) ->
     if not role_col:
         raise ValueError("Need player_role/role in input data to identify receivers and defenders.")
     p = predictions.sort_values("frame_id").groupby(KEYS, as_index=False).tail(1)
+    # Keep the identity/position from the source state as a second guard. A
+    # mistaken role label must not make a quarterback eligible for a suggestion.
+    position_col = next((c for c in ("player_position", "position") if c in state), None)
+    quarterback_ids = set()
+    if position_col:
+        quarterback_ids = set(state.loc[
+            state[position_col].astype(str).str.strip().str.upper().eq("QB"), "nfl_id"
+        ].dropna())
     reports = []
     supplementary_paths = list(data_dir.glob("**/supplementary_data.csv"))
     supplementary = pd.read_csv(supplementary_paths[0], low_memory=False) if supplementary_paths else pd.DataFrame()
     for (game_id, play_id), play in p.groupby(["game_id", "play_id"]):
-        offense = play[play.player_role.isin(["Targeted Receiver", "Other Route Runner"])]
+        offense = play[play.player_role.isin(["Targeted Receiver", "Other Route Runner"])
+                       & ~play.nfl_id.isin(quarterback_ids)]
         defense = play[play.player_role.eq("Defensive Coverage")]
         if offense.empty or defense.empty:
             continue

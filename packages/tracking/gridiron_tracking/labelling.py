@@ -335,6 +335,7 @@ def to_yolo_tiled(
     out_dir = Path(out_dir)
     if out_dir.exists():
         shutil.rmtree(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
 
     by_key = {s.key: s for s in shots}
     usable = [(by_key[k], v) for k, v in labels.labels.items() if k in by_key]
@@ -351,7 +352,7 @@ def to_yolo_tiled(
         log(f"  WARNING: held-out {thin} — too few balls to measure against.")
 
     rng = random.Random(seed)
-    counts = {"train": 0, "val": 0, "boxes": 0, "skipped_partial": 0}
+    counts = {"train": 0, "val": 0, "boxes": 0, "skipped_partial": 0, "unreadable": 0}
 
     def write(split: str, stem: str, img, box: tuple[float, float, float] | None) -> None:
         images = out_dir / "images" / split
@@ -368,64 +369,76 @@ def to_yolo_tiled(
         (texts / f"{stem}.txt").write_text("\n".join(lines) + "\n")
         counts[split] += 1
 
-    def crop(img, ox: int, oy: int):
-        return img[oy:oy + tile, ox:ox + tile]
+    def crop(img, ox: int, oy: int, tw: int, th: int):
+        return img[oy:oy + th, ox:ox + tw]
 
     for shot, label in sorted(usable, key=lambda sl: sl[0].key):
         split = "val" if shot.clip in val_clips else "train"
         img = cv2.imread(shot.path)
         if img is None:
+            counts["unreadable"] += 1
             continue
         h, w = img.shape[:2]
-        if h < tile or w < tile:
-            continue
+        # A frame smaller than the tile becomes one tile of itself rather than
+        # nothing. A 640x360 high-school clip is shorter than a 640 tile in one
+        # axis only, and skipping it would drop the whole clip silently.
+        tw, th = min(tile, w), min(tile, h)
         half = label.size / 2.0
         stem = f"{shot.clip}_{shot.frame:05d}"
 
         if split == "val":
             # The sweep inference performs: a fixed grid, overlapping by half a tile
             # so a ball on a seam still lands whole inside a neighbour.
-            step = tile // 2
-            xs = sorted({min(x, w - tile) for x in range(0, w, step)})
-            ys = sorted({min(y, h - tile) for y in range(0, h, step)})
+            xs = sorted({min(x, w - tw) for x in range(0, w, max(1, tw // 2))})
+            ys = sorted({min(y, h - th) for y in range(0, h, max(1, th // 2))})
             for ox in xs:
                 for oy in ys:
                     box = None
                     if label.visible:
-                        inside_whole = (ox + half <= label.x <= ox + tile - half
-                                        and oy + half <= label.y <= oy + tile - half)
-                        touches = (ox - half < label.x < ox + tile + half
-                                   and oy - half < label.y < oy + tile + half)
+                        inside_whole = (ox + half <= label.x <= ox + tw - half
+                                        and oy + half <= label.y <= oy + th - half)
+                        touches = (ox - half < label.x < ox + tw + half
+                                   and oy - half < label.y < oy + th + half)
                         if inside_whole:
                             box = (label.x - ox, label.y - oy, label.size)
                         elif touches:
                             counts["skipped_partial"] += 1
                             continue
-                    write("val", f"{stem}_{ox}_{oy}", crop(img, ox, oy), box)
+                    write("val", f"{stem}_{ox}_{oy}", crop(img, ox, oy, tw, th), box)
             continue
 
         if label.visible:
             for n in range(crops_per_ball):
-                lo_x = max(0, int(label.x + half - tile))
-                hi_x = min(w - tile, int(label.x - half))
-                lo_y = max(0, int(label.y + half - tile))
-                hi_y = min(h - tile, int(label.y - half))
+                lo_x = max(0, int(label.x + half - tw))
+                hi_x = min(w - tw, int(label.x - half))
+                lo_y = max(0, int(label.y + half - th))
+                hi_y = min(h - th, int(label.y - half))
                 if lo_x > hi_x or lo_y > hi_y:
                     break
                 ox = rng.randint(lo_x, hi_x)
                 oy = rng.randint(lo_y, hi_y)
-                write("train", f"{stem}_p{n}", crop(img, ox, oy),
+                write("train", f"{stem}_p{n}", crop(img, ox, oy, tw, th),
                       (label.x - ox, label.y - oy, label.size))
 
         for n in range(negatives_per_frame):
             for _ in range(20):
-                ox = rng.randint(0, w - tile)
-                oy = rng.randint(0, h - tile)
-                if label.visible and (ox - half < label.x < ox + tile + half
-                                      and oy - half < label.y < oy + tile + half):
+                ox = rng.randint(0, w - tw)
+                oy = rng.randint(0, h - th)
+                if label.visible and (ox - half < label.x < ox + tw + half
+                                      and oy - half < label.y < oy + th + half):
                     continue
-                write("train", f"{stem}_n{n}", crop(img, ox, oy), None)
+                write("train", f"{stem}_n{n}", crop(img, ox, oy, tw, th), None)
                 break
+
+    if counts["unreadable"]:
+        log(f"  WARNING: {counts['unreadable']} frames could not be read as images "
+            f"and produced no tiles")
+    if not counts["train"] and not counts["val"]:
+        raise ValueError(
+            f"no tiles written from {len(usable)} labelled frames "
+            f"({counts['unreadable']} unreadable). Tiling reads the pixels, unlike "
+            f"the whole-frame export, which only copies the files."
+        )
 
     yaml = out_dir / "data.yaml"
     yaml.write_text(
@@ -444,8 +457,11 @@ def train(
     data_yaml: Path,
     base_weights: str = "yolo11n.pt",
     epochs: int = 60,
-    imgsz: int = 1280,
+    imgsz: int = 640,
     out_dir: Path = WEIGHTS_DIR,
+    batch: int = 16,
+    device: str | None = None,
+    small_object: bool = True,
     log=print,
 ) -> Path:
     """Fine-tune a detector on the labelled footballs.
@@ -464,10 +480,22 @@ def train(
     # README tells you to point a clip at — did not exist.
     out_dir = Path(out_dir).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
+    # Mosaic stitches four images into one and downscales it. On whole frames that
+    # is ordinary augmentation; on tiles cropped specifically so the ball arrives
+    # at its real size it undoes the crop, and the ball goes back to the six pixels
+    # that made the first fine-tune fail. The same goes for wide scale jitter.
+    # Measured: with mosaic on, classification loss sat at 147 falling to 10 and
+    # mAP50 never left 0.005; with it off, loss starts near 1.5 and the model
+    # learns. Everything here serves one thing -- the ball reaches the model the
+    # size the source has it.
+    aug = dict(mosaic=0.0, mixup=0.0, copy_paste=0.0, scale=0.2, erasing=0.0) \
+        if small_object else {}
+
     model = YOLO(base_weights)
-    model.train(data=str(data_yaml), epochs=epochs, imgsz=imgsz,
+    model.train(data=str(data_yaml), epochs=epochs, imgsz=imgsz, batch=batch,
                 project=str(out_dir), name="football", exist_ok=True,
-                patience=15, verbose=True)
+                patience=15, verbose=True, **({"device": device} if device else {}),
+                **aug)
     best = out_dir / "football" / "weights" / "best.pt"
     log(f"  weights: {best}")
     log("  point a clip at it with  track.ball_weights  in its spec")

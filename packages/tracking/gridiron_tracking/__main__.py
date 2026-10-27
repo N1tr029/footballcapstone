@@ -379,14 +379,31 @@ def _train_ball(args) -> int:
               f"— pass --min-boxes to override if you know better.", file=sys.stderr)
         return 1
 
-    data = labelling.to_yolo(shots, labels, out_dir=args.dataset,
-                            val_fraction=args.val_fraction)
+    if not args.keep_repeats:
+        labels, repeats = labels.without_stale_repeats()
+        if repeats:
+            print(f"  dropped {sum(repeats.values())} labels that repeat the previous "
+                  f"frame's point exactly {repeats} — a stray second click, not a "
+                  f"sighting. --keep-repeats to train on them anyway.")
+            print(f"  {labels.summary()}")
+
+    if args.tile:
+        data = labelling.to_yolo_tiled(shots, labels, out_dir=args.dataset,
+                                       tile=args.tile, holdout=args.holdout,
+                                       crops_per_ball=args.crops_per_ball,
+                                       negatives_per_frame=args.negatives_per_frame)
+    else:
+        data = labelling.to_yolo(shots, labels, out_dir=args.dataset,
+                                 val_fraction=args.val_fraction,
+                                 holdout=args.holdout)
     if args.export_only:
         print(f"  dataset at {data}")
         return 0
 
     best = labelling.train(data, base_weights=args.base, epochs=args.epochs,
-                           imgsz=args.imgsz, out_dir=args.weights)
+                           imgsz=args.imgsz, out_dir=args.weights,
+                           batch=args.batch, device=args.device,
+                           small_object=bool(args.tile))
     print(f"\n  Now set it on a clip and measure:\n"
           f'    "track": {{"ball": true, "ball_weights": "{best}", "ball_class": 0}}\n'
           f"    python -m gridiron_tracking render <clip>\n"
@@ -469,7 +486,21 @@ def main(argv=None) -> int:
     tb.add_argument("--weights", type=Path, default=WEIGHTS_DIR)
     tb.add_argument("--base", default="yolo11n.pt")
     tb.add_argument("--epochs", type=int, default=60)
-    tb.add_argument("--imgsz", type=int, default=1280)
+    tb.add_argument("--imgsz", type=int, default=640)
+    tb.add_argument("--batch", type=int, default=16)
+    tb.add_argument("--device", default=None, help="mps, cuda, cpu; ultralytics picks one if unset")
+    tb.add_argument("--tile", type=int, default=640, metavar="PX",
+                    help="Crop this many source pixels per training image, so the ball "
+                         "arrives the size the source has it. 0 trains on whole frames "
+                         "resized to --imgsz, which is what scored mAP50 0.005.")
+    tb.add_argument("--holdout", nargs="+", metavar="CLIP",
+                    help="Clips to measure against. Pick one with balls in it: a held-out "
+                         "clip with almost none cannot measure anything, because a model "
+                         "predicting nothing scores well on it.")
+    tb.add_argument("--crops-per-ball", type=int, default=6)
+    tb.add_argument("--negatives-per-frame", type=int, default=1)
+    tb.add_argument("--keep-repeats", action="store_true",
+                    help="Keep labels that repeat the previous frame's point exactly")
     tb.add_argument("--val-fraction", type=float, default=0.2)
     tb.add_argument("--min-boxes", type=int, default=80)
     tb.add_argument("--export-only", action="store_true",

@@ -210,6 +210,26 @@ def decisions(state: pd.DataFrame, predictions: pd.DataFrame, data_dir: Path) ->
     return reports
 
 
+def recommended_receiver_id(report: dict):
+    """Which receiver the report recommends, whichever shape the report is in.
+
+    ``decisions`` writes ``best_alternative_receiver_id`` inside ``evidence``. Three
+    readers looked for it at the top level, where ``.get`` returns None quietly, so
+    every ``consider_alternative`` play reached the API recommending nobody -- 39 of
+    52 on week 1, and precisely the plays whose entire point is naming the receiver
+    the ball should have gone to. The reason string beside it named him correctly,
+    which is what made it survive review.
+
+    Evidence first, top level second: a caller holding an older flattened report
+    still works, and nothing silently returns None again.
+    """
+    evidence = report.get("evidence") or {}
+    if report.get("decision") == "consider_alternative":
+        return evidence.get("best_alternative_receiver_id",
+                            report.get("best_alternative_receiver_id"))
+    return evidence.get("targeted_receiver_id", report.get("targeted_receiver_id"))
+
+
 def suggested_play_rows(inputs: pd.DataFrame, predictions: pd.DataFrame, reports: list[dict]) -> pd.DataFrame:
     """Build replay-like records from the observed input and modeled future.
 
@@ -236,13 +256,13 @@ def suggested_play_rows(inputs: pd.DataFrame, predictions: pd.DataFrame, reports
         observed["source_frame_id"] = observed["frame_id"]
         observed["play_start_frame_id"] = pd.to_numeric(observed["frame_id"]).min()
         observed["recommendation_reason"] = report["recommendation_reason"]
-        observed["recommended_target_nfl_id"] = report.get("best_alternative_receiver_id") if report["decision"] == "consider_alternative" else report["evidence"].get("targeted_receiver_id")
+        observed["recommended_target_nfl_id"] = recommended_receiver_id(report)
         output.append(observed)
 
         # Keep the same tracking columns as the source data for Unity/import use.
         last = observed.sort_values("frame_id").groupby("nfl_id", as_index=False).tail(1).set_index("nfl_id")
         target_id = observed[observed.player_role.eq("Targeted Receiver")].nfl_id.iloc[0]
-        rec_id = report.get("best_alternative_receiver_id") if report["decision"] == "consider_alternative" else target_id
+        rec_id = recommended_receiver_id(report) if report["decision"] == "consider_alternative" else target_id
         if rec_id not in last.index or rec_id is None:
             rec_id = target_id
         rec_future = future[future.nfl_id == rec_id].sort_values("frame_id")
@@ -367,9 +387,7 @@ def build_suggested_play_payload(
                   for r in event_rows.itertuples(index=False)]
         frames.append({"frame_id": int(frame_id), "players": players, "ball": ball, "events": events})
 
-    target_id = (play_report.get("best_alternative_receiver_id")
-                 if play_report["decision"] == "consider_alternative"
-                 else play_report.get("evidence", {}).get("targeted_receiver_id"))
+    target_id = recommended_receiver_id(play_report)
     return {
         "schema_version": 1,
         "game_id": int(game_id),

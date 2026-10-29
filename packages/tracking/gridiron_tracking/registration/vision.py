@@ -259,6 +259,20 @@ and one number on its own tells it almost nothing. Often none are legible — wo
 night games, and camera angles all defeat them, and an empty list is the right answer \
 when that is the case. Do not strain to read one.
 
+Report only what is painted on the grass. A televised game has a second set of markings \
+that are not on the field at all: the blue first-down line and the yellow line to gain \
+are drawn into the picture, and so are the down and distance written across the turf, \
+the score bug along the bottom, the network's logo and any sponsor's name. They are \
+composited over the grass and they look exactly like paint. A yard number is painted \
+flat into the turf, so it lies in the plane of the field, it is squashed by the camera \
+angle to the same degree as the yard line beside it, and the far row is upside down \
+because it is painted to be read from the other touchline. Anything standing upright, \
+anything facing the camera squarely, anything crisp while the paint around it is worn, \
+and anything with a coloured panel behind it is a graphic — leave it out. The digits in \
+"1ST & 10" and in the score bug are the ones most often mistaken for yard numbers, and a \
+10 invented at the middle of the frame from a down-and-distance caption moves every \
+player on the field.
+
 Give every position as a fraction of the image, between 0 and 1: 0.5 means halfway \
 across, or halfway down. Not pixels.
 
@@ -641,7 +655,16 @@ def infer_halves(reading) -> list[str]:
     if fifty is not None:
         lo = [n for n in nums if n.number != 50 and n.x_frac < fifty.x_frac]
         hi = [n for n in nums if n.number != 50 and n.x_frac > fifty.x_frac]
-        if lo and hi:
+        # A 50 is the strongest single thing to split on and therefore the most
+        # expensive to get wrong: it sends numbers on either side of it to opposite
+        # halves, forty yards apart. On a televised game the model reads one where
+        # there is none — on this project's NFL clip it returned a 50 at the middle
+        # of the frame, "certain", in three reads out of four, with no 50 on the
+        # field at all; it was reading the down-and-distance caption. So the claim
+        # has to agree with the field before it is acted on. Walking away from the
+        # 50 the next number painted is always a 40, so a 30 or lower sitting
+        # directly beside it means the 50 is not what the software was told it is.
+        if lo and hi and max(lo[-1].number, hi[0].number) >= 40:
             # Image-left is the low-x end of the field, the same convention the
             # landmark resolver uses, so the numbers left of the 50 are the low half.
             changed = [n.number for n in lo if n.side != "left_half"]

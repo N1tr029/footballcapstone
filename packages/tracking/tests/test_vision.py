@@ -257,33 +257,36 @@ def _reading(numbers, end_zone="none_visible"):
 
 
 def test_numbers_either_side_of_the_50_land_in_different_halves():
-    """The failure that cost every anchor frame of an NFL broadcast."""
-    r = _reading([(30, 0.27), (50, 0.51), (30, 0.72)])
+    """The failure that cost every anchor frame of an NFL broadcast: one half was
+    forced onto a frame that straddles the 50, putting yard lines forty yards
+    apart onto the same line."""
+    r = _reading([(30, 0.2), (40, 0.35), (50, 0.51), (40, 0.68), (30, 0.82)])
     notes = V.infer_halves(r)
 
     by_x = sorted(r.yard_numbers, key=lambda n: n.x_frac)
-    assert [n.side for n in by_x] == ["left_half", "unclear", "right_half"], notes
+    assert [n.side for n in by_x] == [
+        "left_half", "left_half", "unclear", "right_half", "right_half"], notes
 
-    # Which is the whole point: three distinct yard lines, forty yards apart.
+    # Which is the whole point: five distinct yard lines, forty yards apart.
     xs = [V.field_x_for(n.number, n.side) for n in by_x]
-    assert xs == [40.0, 60.0, 80.0]
-    assert max(x for x in xs if x) - min(x for x in xs if x) == 40.0
+    assert xs == [40.0, 50.0, 60.0, 70.0, 80.0]
+    assert max(xs) - min(xs) == 40.0
 
 
-def test_a_symmetric_pair_of_30s_is_no_longer_collapsed_onto_one_line():
-    """Without the 50 to split on, [30, 30] is neither rising nor falling, and the
-    sequence rule gives up. With it, the pair is forty yards apart."""
-    r = _reading([(30, 0.27), (50, 0.51), (30, 0.72)])
+def test_a_symmetric_pair_is_no_longer_collapsed_onto_one_line():
+    """Without the 50 to split on, [40, 40] is neither rising nor falling, and the
+    sequence rule gives up. With it, the pair is twenty yards apart."""
+    r = _reading([(40, 0.3), (50, 0.5), (40, 0.7)])
     V.infer_halves(r)
     xs = sorted(V.field_x_for(n.number, n.side)
                 for n in r.yard_numbers if n.number != 50)
-    assert xs == [40.0, 80.0], "the two 30s are the same yard line again"
+    assert xs == [50.0, 70.0], "the two 40s are the same yard line again"
 
 
 def test_the_50_split_beats_a_visible_end_zone():
     """An end zone says the frame is in one half. Numbers straddling the 50 say it
     is not, and that is the more direct evidence — it is about these very numbers."""
-    r = _reading([(30, 0.27), (50, 0.51), (30, 0.72)], end_zone="left")
+    r = _reading([(40, 0.3), (50, 0.5), (40, 0.7)], end_zone="left")
     notes = V.infer_halves(r)
     assert "split at the 50" in notes[0]
     by_x = sorted(r.yard_numbers, key=lambda n: n.x_frac)
@@ -350,3 +353,27 @@ def test_rows_are_split_the_same_way_the_field_y_split_does_it():
     assert len(V._number_rows(one.yard_numbers)) == 1
     two = _two_row_reading(far=[(20, 0.2)], near=[(20, 0.3)])
     assert len(V._number_rows(two.yard_numbers)) == 2
+
+
+def test_a_50_with_no_40_beside_it_is_not_trusted_to_split_the_halves():
+    """On this project's NFL clip the model returned a 50 at the middle of the
+    frame, "certain", in three reads out of four, and there is no 50 on that field
+    — it was reading the "1ST & 10" caption. Acted on, that scatters real numbers
+    across both halves, forty yards apart. Walking away from a real 50 the next
+    number is always a 40, so a 30 directly beside it gives the lie away."""
+    r = _reading([(30, 0.27), (50, 0.51), (30, 0.72)])
+    # 30 immediately either side of the claimed 50: impossible on a real field.
+    notes = V.infer_halves(r)
+    assert not any("split at the 50" in n for n in notes), notes
+
+
+def test_a_50_flanked_by_a_40_is_still_trusted():
+    """The guard must not throw away the real case it was built for."""
+    r = _reading([(30, 0.2), (40, 0.35), (50, 0.51), (40, 0.68), (30, 0.82)])
+    notes = V.infer_halves(r)
+    assert any("split at the 50" in n for n in notes), notes
+    by_x = sorted(r.yard_numbers, key=lambda n: n.x_frac)
+    assert [n.side for n in by_x] == [
+        "left_half", "left_half", "unclear", "right_half", "right_half"]
+    xs = [V.field_x_for(n.number, n.side) for n in by_x]
+    assert xs == [40.0, 50.0, 60.0, 70.0, 80.0]

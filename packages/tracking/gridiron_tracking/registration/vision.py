@@ -63,23 +63,34 @@ QWEN_BASE_URL = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
 so ``DASHSCOPE_BASE_URL`` overrides this."""
 
 FALLBACKS: dict[str, tuple[str, ...]] = {
-    "gemini-flash-latest": ("gemini-flash-lite-latest", "gemini-3-flash-preview"),
-    "gemini-pro-latest": ("gemini-flash-latest", "gemini-flash-lite-latest"),
+    "gemini-flash-latest": ("gemini-3-flash-preview",),
+    "gemini-pro-latest": ("gemini-flash-latest", "gemini-3-flash-preview"),
 }
 """Where to go when a model name is up but the model behind it is not.
 
-Not a quality ranking — a liveness one. A hosted frontier model returns 503 under load
-often enough that on a 150-frame clip it is the normal case rather than the exception,
-and a registration that gives up on the first 503 fails the whole clip for a reason
-that has nothing to do with the footage. Measured on a 1080p NFL broadcast: nine of
-nine anchor frames failed on ``gemini-flash-latest``, seven to 503 and two to a
-truncated answer, while ``gemini-flash-lite-latest`` read one of those same frames
-correctly on the first try — both sidelines, the near hash row, the 50 and both 30s,
-and the level identified as NFL.
+Liveness, not quality — but the two cannot be separated as cleanly as that sounds,
+and getting it wrong here is worse than having no fallback at all.
 
-The order is deliberate. Falling back to a smaller sibling of the same family keeps
-the prompt on a model the prompt was tested against; falling back across providers is
-a bigger behavioural change and is left to the caller's model choice.
+The need is real. A hosted frontier model returns 503 under load often enough that on
+a 150-frame clip it is the normal case rather than the exception, and a registration
+that gives up on the first 503 fails the whole clip for a reason that has nothing to
+do with the footage: nine of nine anchor frames on a 1080p NFL broadcast failed that
+way, seven to 503 and two to a truncated answer.
+
+What is NOT in this chain is the point of it. ``gemini-flash-lite-latest`` was the
+first fallback here, on the strength of answering when the others would not. Read
+against a frame whose painted numbers were checked by hand — a 40 and a 30, no 50
+anywhere — it returned a 50 at the middle of the frame marked "certain" on four reads
+out of four, and read the 40 as a 10. It was reading the "1ST & 10" caption and the
+score bug. ``gemini-3-flash-preview`` read the same frame as 40 at 0.27 and 30 at
+0.68, twice, which is exactly right; plain ``gemini-flash-latest`` misread the 40 but
+invented nothing.
+
+So a model that answers confidently and wrongly is not a fallback, it is a liability,
+and it belongs out of the chain rather than at the end of it. Registration failing is
+recoverable — a person pins the clip. Registration succeeding on a phantom yard line
+puts every player tens of yards from where he stood and nothing downstream notices.
+Anything added here needs checking against a frame someone has read by eye first.
 """
 
 ATTEMPTS = 3

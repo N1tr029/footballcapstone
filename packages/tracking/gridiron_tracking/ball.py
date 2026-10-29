@@ -174,7 +174,23 @@ class BallTracker:
             return BallSample(t, float(self.x[0]), float(self.x[1]), "detected", pick[2])
 
         self.since_seen += self.dt
-        if self.x is not None and self.since_seen <= MAX_COAST_S:
+
+        # Coasting extrapolates the last sighting; attribution says who is holding
+        # it now. Which is better evidence depends on whether it is in the air.
+        #
+        # In flight nobody has it, and snapping it to the nearest pair of hands
+        # would draw a thrown ball as a carried one -- so the filter coasts, which
+        # is what a ball in flight actually does. Below throwing speed it is being
+        # carried, and a man's measured position beats a constant-velocity guess
+        # off an estimate that is already a fraction of a second old.
+        #
+        # This order matters now in a way it did not when attribution was only a
+        # last resort: it is the source for most frames of most plays.
+        in_flight = (self.x is not None
+                     and float(np.linalg.norm(self.x[2:])) > MAX_CARRY_SPEED_YPS)
+        coastable = self.x is not None and self.since_seen <= MAX_COAST_S
+
+        if coastable and (in_flight or carrier_xy is None):
             return BallSample(t, float(self.x[0]), float(self.x[1]), "coasted")
 
         if carrier_xy is not None:

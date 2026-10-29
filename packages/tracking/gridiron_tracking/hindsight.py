@@ -1,7 +1,9 @@
 """The Unity app's play JSON, both directions.
 
-``packages/replay-engine/hindsight`` is Jeremy's Unity 6.6 replay app, merged with
-its own history. It reads a schema its own exporter writes — ``schemaVersion 1``,
+`EllisJeremy/hindsight-frontend <https://github.com/EllisJeremy/hindsight-frontend>`_
+is Jeremy's Unity 6.6 replay app, which lives in its own repository; its exported
+plays are pinned under ``tests/fixtures/hindsight-plays``. It reads a schema its own
+exporter writes — ``schemaVersion 1``,
 documented in its ``CLAUDE.md`` — and it was designed independently of this
 repository's contract. The two agree on more than they disagree, which is the
 dangerous ratio, so the differences are worth stating before the code:

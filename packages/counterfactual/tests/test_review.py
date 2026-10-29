@@ -15,7 +15,7 @@ from gridiron_tracking import hindsight
 
 pytestmark = pytest.mark.skipif(
     not HINDSIGHT_PLAYS.exists() or not MODEL.exists(),
-    reason="needs the hindsight subtree and the fitted model",
+    reason="needs tests/fixtures/hindsight-plays and the fitted model",
 )
 
 

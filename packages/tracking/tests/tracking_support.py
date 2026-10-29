@@ -11,7 +11,8 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[3]
 CONTRACT_JS = REPO / "packages/replay-engine/prototype/engine/contract.js"
 
-# The Unity app's real play files, merged in from hindsight-frontend. The suite
-# that uses them skips when the subtree is absent, so a checkout without it still
-# runs green rather than erroring.
-HINDSIGHT_PLAYS = REPO / "packages/replay-engine/hindsight/Assets/StreamingAssets/plays"
+# The Unity app's real play files. The app itself lives in EllisJeremy/hindsight-frontend
+# and is no longer part of this repository, so its exported plays are committed here
+# instead: they are the only real-play fixture the suite has. Read-only — the CLIs that
+# write plays default to data/unity-plays so a run cannot edit a committed fixture.
+HINDSIGHT_PLAYS = REPO / "tests/fixtures/hindsight-plays"

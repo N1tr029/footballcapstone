@@ -87,9 +87,12 @@ def _add(args) -> int:
     return 0
 
 
-UNITY_PLAYS = Path("packages/replay-engine/hindsight/Assets/StreamingAssets/plays")
-"""Where the Unity app loads plays from. Its PlayLoader reads index.json and then
-``{gameId}_{playId}.json`` beside it, so writing here is the whole install step."""
+UNITY_PLAYS = Path("data/unity-plays")
+"""A StreamingAssets/plays folder for the Unity app, which lives in its own
+repository (EllisJeremy/hindsight-frontend) rather than here. Its PlayLoader reads
+index.json and then ``{gameId}_{playId}.json`` beside it, so copying this folder into
+that checkout's Assets/StreamingAssets/plays is the whole install step — or pass
+``--unity-dir`` pointing straight at it."""
 
 
 def _unity(args) -> int:
@@ -380,7 +383,8 @@ def _train_ball(args) -> int:
         return 1
 
     data = labelling.to_yolo(shots, labels, out_dir=args.dataset,
-                            val_fraction=args.val_fraction)
+                             val_fraction=args.val_fraction,
+                             holdout=args.holdout or None)
     if args.export_only:
         print(f"  dataset at {data}")
         return 0
@@ -471,6 +475,9 @@ def main(argv=None) -> int:
     tb.add_argument("--epochs", type=int, default=60)
     tb.add_argument("--imgsz", type=int, default=1280)
     tb.add_argument("--val-fraction", type=float, default=0.2)
+    tb.add_argument("--holdout", nargs="*", default=None,
+                    help="clips to hold out, by name; choose ones with enough "
+                         "labelled balls that the score means something")
     tb.add_argument("--min-boxes", type=int, default=80)
     tb.add_argument("--export-only", action="store_true",
                     help="write the YOLO dataset and stop")

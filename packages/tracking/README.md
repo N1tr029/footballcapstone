@@ -25,7 +25,9 @@ kind of project runs out of semester.
 Layer 2 is built and validated against real tracking. Layer 1's back half is built
 and measured: registration, field-space tracking, resampling, kinematics, orientation,
 export, and the benchmark that scores it in yards. Layer 1's front half — a real
-detector on real pixels — is next, and nothing here has yet seen a photograph.
+detector on real pixels — has started: players come off a general-purpose detector,
+and the ball has a fine-tune of its own, measured and still too weak to use. See
+**The ball** below for exactly how weak and why.
 
 Everything here runs on `numpy scipy pandas pyarrow` alone. OpenCV and ultralytics
 are optional extras, needed only once real video is involved.
@@ -56,6 +58,22 @@ export.write_play("out/", track, interactions.derive(track, offense="home"))
 block. **Read `provenance` before trusting any of it.**
 
 Any public NGS release works as the `--csv`; column spellings are resolved by alias.
+
+**Where to get one, without an account.** The release every number below is measured
+on is published openly by the NFL — no Kaggle sign-in, no competition entry:
+
+```bash
+mkdir -p data/bdb2017 && cd data/bdb2017
+for f in tracking_gameId_2017090700.csv plays.csv games.csv players.csv; do
+  curl -LO "https://raw.githubusercontent.com/nfl-football-ops/Big-Data-Bowl/master/Data/$f"
+done
+```
+
+30 MB, 177 plays, and it carries the three things the newer competition files do
+not: an `event` column, a `dis` column, and real per-frame football rows. The
+2026 competition release loads fine through the same aliases but cannot drive the
+benchmark — it has `ball_land_x`/`ball_land_y`, where the ball came down, and no
+record of where it was on the way.
 
 ## How accuracy is measured
 
@@ -233,10 +251,45 @@ texture. No fast coherent trajectory at all. The pan cancellation and the turf m
 both work; the signal-to-noise is the problem, and tuning it further against a clip
 with no ground truth is how the 42% figure above happened in the first place.
 
-**What would clear it.** A detector fine-tuned on footballs — a few hundred labelled
-frames across these eight clips, which is an afternoon of labelling and an hour of
-training. Nothing else in the chain is waiting on research; this is the one piece,
-and the machinery around it is built:
+**The fine-tune happened, and the first one was measured wrong.** It scored
+mAP50 0.005 and was written off. Re-measured against the holdout it was actually
+built with — `devin_td`, 25 balls — `best.pt` scores:
+
+| imgsz | mAP50 | precision | recall |
+|---|---|---|---|
+| 960 — what it was trained at | **0.107** | 0.478 | 0.120 |
+| 1536 — what it is *used* at | 0.001 | 0.003 | 0.120 |
+
+It had learned something: nearly half right when it fires, firing on an eighth of
+the balls. Too weak to use, and weak for two reasons that are not about footballs.
+
+**Scale.** It was trained on whole 1920x1080 frames at `imgsz 960`, which halves
+everything — a twelve-pixel ball arrives as six, at or under the floor of a
+stride-8 detection head. Inference does the *opposite*: it tiles the frame and
+magnifies each tile, so the ball it is asked about is two to three times larger
+than any ball it was trained on. The collapse from 0.107 to 0.001 between those two
+sizes is that mismatch measured. `to_yolo_tiled` crops at native resolution
+instead, so training sees the ball the size the source has it, and held-out clips
+are cut on the same overlapping grid inference sweeps with.
+
+Mosaic augmentation has to go off with it. Mosaic stitches four images into one and
+downscales — on tiles cropped specifically to preserve the ball's size it undoes
+the crop and hands back the six-pixel ball. With it on, classification loss sat at
+147 falling to 10 and mAP50 never left 0.005; with it off the loss starts near 1.5.
+
+**Stale labels.** 25 of the first 112 labels are exact coordinate repeats — the
+same point to the last decimal, which is a click quantised to a screen pixel, not a
+hand. A click saves the frame and advances, leaving the next frame under a cursor
+that has not moved; click again and it is labelled at the old frame's point. 20 of
+the 25 are one kickoff: a ball in flight recorded at one fixed point, so the box
+sits a ball-width behind the ball on every frame but the first. That was **30% of
+the training positives**. The UI now refuses a click within two pixels of the
+previous frame's, and `without_stale_repeats` throws away the ones already
+collected.
+
+**What is still needed.** 87 real labels is thin, and the honest next gain is more
+of them rather than more epochs. Nothing else in the chain is waiting on research;
+this is the one piece, and the machinery around it is built:
 
 ```bash
 python -m gridiron_tracking label        # samples frames, opens the labelling UI
@@ -256,12 +309,36 @@ out a clip measures the only thing worth knowing, which is whether it finds a ba
 on footage it has not seen. Frames marked `N` become empty label files — the
 negatives that stop a fine-tune learning the graphic all over again.
 
+Name the clip with `--holdout`, and name one with balls in it. The first run held
+out `ucf_kickoff`, which has **one**: a model that predicts nothing at all scores
+well on that, and the resulting number means nothing either way. `to_yolo` warns
+when the held-out clip has fewer than five.
+
 Then point a clip at the result and **measure it the same way**:
 
 ```jsonc
 "track": { "ball": true, "ball_weights": "data/labels/weights/football/weights/best.pt",
-           "ball_class": 0 }
+           "ball_class": 0, "ball_imgsz": 640, "ball_tiles": 3 }
 ```
+
+**These two numbers are not free.** `ball_tiles: 3` over a 1920-wide frame cuts
+640-wide tiles, and `ball_imgsz: 640` hands each one to the model unscaled — which
+is the tile size and the magnification `train-ball` used, so the ball arrives the
+size it was learned at.
+
+The rule is `ball_imgsz` = the `--imgsz` the weights were trained with, and
+`ball_tiles` chosen so a tile is the `--tile` they were trained with. Change one
+and you must change the other. Reading them off `args.yaml` beside the weights is
+the reliable way:
+
+```bash
+grep -E "^(imgsz|model):" data/labels/weights/football/args.yaml
+```
+
+Getting this wrong is not a small miscalibration. The same weights score mAP50
+0.107 at the size they were trained at and 0.001 two sizes up — setting these
+independently of training is exactly how the first fine-tune came to look
+worthless at the size it was being used at.
 
 Read `travelled_yards` beside `measured_fraction`. A detection rate alone has looked
 like progress twice on this task and been furniture both times.

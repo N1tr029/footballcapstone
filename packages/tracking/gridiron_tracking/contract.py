@@ -82,19 +82,36 @@ class PlayerFrame:
 
 @dataclass
 class Ball:
+    """Where the ball was, and how that was arrived at.
+
+    ``source`` is to a ball position what ``o_source`` is to a player's orientation.
+    A ball on a frame can be any of: a sighting the detector made and the filter
+    accepted (``detected``), the filter's estimate carried across a gap where nobody
+    could see it (``coasted``), or an attribution to whoever possession says is
+    carrying it (``carrier``) — which is not a sighting at all. Drawn identically
+    they are indistinguishable, and two of the three are then being presented as
+    something they are not.
+
+    ``None`` means the producer did not say. A consumer should treat that as
+    unverified rather than as measured.
+    """
+
     x: float
     y: float
     z: float | None = None
+    source: str | None = None
 
     def to_json(self) -> dict[str, Any]:
         d: dict[str, Any] = {"x": self.x, "y": self.y}
         if self.z is not None:
             d["z"] = self.z
+        if self.source is not None:
+            d["source"] = self.source
         return d
 
     @classmethod
     def from_json(cls, d: dict[str, Any]) -> "Ball":
-        return cls(x=d["x"], y=d["y"], z=d.get("z"))
+        return cls(x=d["x"], y=d["y"], z=d.get("z"), source=d.get("source"))
 
 
 @dataclass

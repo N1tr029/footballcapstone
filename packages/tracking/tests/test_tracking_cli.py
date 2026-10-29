@@ -204,13 +204,90 @@ def test_train_ball_export_only_writes_a_dataset_and_stops(tmp_path, capsys):
         store.labels[s.key] = labelling.Label(key=s.key, x=640.0, y=360.0)
     store.save(tmp_path / "labels.json")
 
+    # --tile 0 is the whole-frame export, which copies the files without reading
+    # them; these are one byte each and are not decodable. The tiled default is
+    # exercised against real pixels in test_tiling_reads_real_pixels below.
     rc = cli.main(["train-ball", "--frames", str(frames),
                    "--labels", str(tmp_path / "labels.json"),
-                   "--dataset", str(tmp_path / "ds"),
+                   "--dataset", str(tmp_path / "ds"), "--tile", "0",
                    "--min-boxes", "4", "--export-only"])
     assert rc == 0
     assert (tmp_path / "ds/data.yaml").exists()
     assert "dataset at" in capsys.readouterr().out
+
+
+def test_tiling_reads_real_pixels_and_keeps_the_ball_where_it_was(tmp_path):
+    """The tiled export crops rather than copies, so it needs decodable frames.
+
+    Checked here on generated ones: a box written into a tile has to land on the
+    same pixels of the source it was clicked on. Getting that wrong is invisible --
+    the dataset looks fine and the detector learns grass.
+    """
+    cv2 = pytest.importorskip("cv2")
+    import numpy as np
+
+    from gridiron_tracking import labelling
+
+    frames = tmp_path / "frames"
+    frames.mkdir()
+    shots, store = [], labelling.LabelSet()
+    for clip in ("a", "b"):
+        for i in range(4):
+            img = np.full((720, 1280, 3), 60, np.uint8)
+            bx, by = 400 + 30 * i, 300 + 20 * i
+            cv2.circle(img, (bx, by), 8, (30, 90, 180), -1)   # something to find
+            path = frames / f"{clip}_{i:05d}.jpg"
+            cv2.imwrite(str(path), img)
+            shots.append(labelling.Shot(key=f"{clip}/{i}", clip=clip, frame=i,
+                                        path=str(path), width=1280, height=720))
+            store.labels[f"{clip}/{i}"] = labelling.Label(key=f"{clip}/{i}",
+                                                          x=float(bx), y=float(by))
+
+    out = tmp_path / "ds"
+    labelling.to_yolo_tiled(shots, store, out_dir=out, tile=640, holdout=["b"],
+                            crops_per_ball=2, negatives_per_frame=1,
+                            log=lambda *a, **k: None)
+    assert (out / "data.yaml").exists()
+
+    boxed = [t for t in (out / "labels/train").glob("*.txt") if t.stat().st_size > 2]
+    assert boxed, "no positive tiles written"
+    for t in boxed:
+        tile_img = cv2.imread(str(out / "images/train" / (t.stem + ".jpg")))
+        h, w = tile_img.shape[:2]
+        cx, cy, _, _ = [float(v) for v in t.read_text().split()[1:5]]
+        px, py = int(cx * w), int(cy * h)
+        b, g, r = tile_img[py, px]
+        # cv2 is BGR, so (30, 90, 180) draws a tan-red mark on flat grey.
+        assert int(r) > int(b) + 30, f"{t.stem}: box at ({px},{py}) is not on the mark"
+
+
+def test_a_frame_smaller_than_the_tile_still_produces_one(tmp_path):
+    """A 640x360 clip is shorter than a 640 tile. It must not vanish."""
+    cv2 = pytest.importorskip("cv2")
+    import numpy as np
+
+    from gridiron_tracking import labelling
+
+    frames = tmp_path / "frames"
+    frames.mkdir()
+    shots, store = [], labelling.LabelSet()
+    for i in range(4):
+        img = np.full((360, 640, 3), 60, np.uint8)
+        cv2.circle(img, (200 + 20 * i, 180), 6, (30, 90, 180), -1)
+        path = frames / f"hs_{i:05d}.jpg"
+        cv2.imwrite(str(path), img)
+        shots.append(labelling.Shot(key=f"hs/{i}", clip="hs", frame=i,
+                                    path=str(path), width=640, height=360))
+        store.labels[f"hs/{i}"] = labelling.Label(key=f"hs/{i}",
+                                                  x=float(200 + 20 * i), y=180.0)
+
+    out = tmp_path / "ds"
+    labelling.to_yolo_tiled(shots, store, out_dir=out, tile=640,
+                            crops_per_ball=1, negatives_per_frame=0,
+                            log=lambda *a, **k: None)
+    written = list((out / "images/train").glob("*.jpg"))
+    assert written, "a short clip produced no tiles at all"
+    assert cv2.imread(str(written[0])).shape[:2] == (360, 640)
 
 
 # ------------------------------------------------------------------- clips

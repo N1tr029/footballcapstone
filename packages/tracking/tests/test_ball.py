@@ -72,3 +72,29 @@ def test_every_sample_says_how_it_was_arrived_at():
     tr = B.track_ball(times, cands, dt=0.1)
     assert all(s.source in ("detected", "coasted", "carrier", "none") for s in tr.samples)
     assert tr.samples[0].measured is (tr.samples[0].source == "detected")
+
+
+def test_the_merge_keeps_each_frames_own_source():
+    """Per-frame, not just the proportions in meta.
+
+    ``_merge_ball`` records how much of the track was measured in ``meta['ball']``,
+    which answers "should I trust this play" but not "should I draw this frame".
+    A play that is 40% measured has both kinds of frame in it, and the aggregate
+    cannot say which is which.
+    """
+    from gridiron_tracking.contract import PlayTrack, TrackingFrame
+    from gridiron_tracking.render import _merge_ball
+
+    times = [round(k * 0.1, 3) for k in range(12)]
+    path = _thrown(len(times))
+    # Seen for the first half, then nobody can see it.
+    cands = {t: [(x, y, 0.5)] for t, (x, y) in list(zip(times, path))[:6]}
+    tr = B.track_ball(times, cands, dt=0.1)
+
+    track = PlayTrack(frames=[TrackingFrame(t=t, players={}) for t in times])
+    _merge_ball(track, tr, log=lambda *a, **k: None)
+
+    got = [f.ball.source for f in track.frames if f.ball is not None]
+    assert "detected" in got and "coasted" in got
+    # and the aggregate still agrees with the frames it was summarised from
+    assert track.meta["ball"]["by_source"]["detected"] == got.count("detected")

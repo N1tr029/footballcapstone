@@ -13,7 +13,8 @@ requires-python = ">=3.11"
 dependencies = [
   "numpy>=1.24",
   "pandas>=2.0",
-  "scikit-learn>=1.3",
+  # sklearn estimator pickle formats are not stable across minor versions.
+  "scikit-learn>=1.8,<1.9",
   "joblib>=1.3",
   "gridiron-tracking",
 ]

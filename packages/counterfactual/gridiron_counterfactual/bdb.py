@@ -14,12 +14,13 @@ repository two answers to "which way is +y", which is the specific failure
 
 Two things about this release in particular.
 
-**It is half a play.** ``input_2023_wXX.csv`` stops at the throw and
-``output_2023_wXX.csv`` is the airborne portion, and only for the players the
-competition asks you to predict. So a track built from the input alone ends at the
-release and carries no ball: the contract validator will say "no ball track" and
-"no ball_snap event", and both complaints are correct. They are recorded in meta
-rather than silenced, because the alternative is inventing a ball.
+**It is a partial play.** ``input_2023_wXX.csv`` stops at the throw and tracks only
+selected pass-play participants; it does not contain all 22 players. The output
+file covers the airborne portion only for players the competition asks you to
+predict. A track built from the input alone ends at the release and carries no ball:
+the contract validator will say "no ball track" and "no ball_snap event", and both
+complaints are correct. These gaps are recorded in meta rather than hidden, because
+the missing positions cannot be reconstructed from this release.
 
 **Its angle convention is checked, not assumed.** Conventions have moved between
 releases, and a reflected ``dir`` does not look broken — it looks like everyone is
@@ -120,6 +121,17 @@ def to_play_track(
         "Pre-throw only: this release's input file ends at the release, so the "
         "track has no ball and no snap. Both are real gaps, not bugs."
     )
+    # The competition input is a role-selected subset, not all 22 players on the
+    # field. Keep this limitation on the track so consumers do not mistake the
+    # available roster for a complete play or fill it with guessed trajectories.
+    track.meta["tracked_player_count"] = int(play["player_id"].nunique())
+    track.meta["roster_complete"] = False
+    track.meta["roster_coverage"] = "competition_subset"
+    track.meta["roster_coverage_note"] = (
+        "The Big Data Bowl input tracks selected pass-play participants only; "
+        "it does not contain coordinates for all 22 players. Missing players "
+        "cannot be reconstructed from this release."
+    )
 
     # --- roles ---------------------------------------------------------------
     # The release says both what a man plays and what he was doing on this snap.
@@ -131,6 +143,11 @@ def to_play_track(
     # one release's vocabulary would mean changing the renderer's contract to suit
     # a Kaggle column. RosterEntry.role stays the position a man plays.
     if "role" in play.columns:
+        track.meta["role_counts"] = {
+            str(role): int(count)
+            for role, count in play.dropna(subset=["role"])
+                              .groupby("role")["player_id"].nunique().items()
+        }
         roles = {
             _key(pid): str(role)
             for pid, role in play.dropna(subset=["role"])

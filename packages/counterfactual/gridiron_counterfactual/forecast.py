@@ -52,11 +52,13 @@ def to_play_track(
     one row per player per step, positions in the release's own frame of reference,
     which is what the model emits and what ``features`` fed it.
 
-    ``source`` is the real play the forecast continues. Its roster is reused — a
-    simulated play has the same twenty-two people on the field — and so is its
-    ``play_direction``, which is how the predicted positions get mirrored back into
-    contract coordinates. Passing the wrong source play mirrors the forecast and
-    nothing complains, so the two must come from the same ``bdb.to_play_track``.
+    ``source`` is the real play the forecast continues. Its roster is reused, so
+    the forecast contains the same players the source actually tracks. Some sources
+    (including this competition release) contain only a subset of the 22 players;
+    the forecast cannot add players without observed states. Its ``play_direction``
+    is also reused to mirror positions back into contract coordinates. Passing the
+    wrong source play mirrors the forecast and nothing complains, so the two must
+    come from the same ``bdb.to_play_track``.
     """
     for col in (x_col, y_col, step_col, "player_id"):
         if col not in predictions.columns:
@@ -142,6 +144,9 @@ def to_play_track(
         "play_direction": source.meta.get("play_direction"),
         "t0": t0,
         "roles": dict(source.meta.get("roles") or {}),
+        "roster_complete": source.meta.get("roster_complete"),
+        "roster_coverage": source.meta.get("roster_coverage", "unspecified"),
+        "roster_coverage_note": source.meta.get("roster_coverage_note"),
         "orientation_measured": False,
         "acceleration_measured": False,
         "predicted_by": "packages/counterfactual decision_engine coordinate regressors",

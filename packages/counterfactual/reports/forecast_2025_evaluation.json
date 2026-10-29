@@ -1,0 +1,24 @@
+{
+  "held_out_by": "week",
+  "folds": 9,
+  "samples": 149424,
+  "passes": 6792,
+  "error_yards_at_arrival": {
+    "model": {
+      "mean": 0.77,
+      "median": 0.48,
+      "p90": 1.661
+    },
+    "keep_current_speed": {
+      "mean": 1.343,
+      "median": 0.878,
+      "p90": 2.902
+    },
+    "stand_still": {
+      "mean": 3.049,
+      "median": 2.321,
+      "p90": 6.14
+    }
+  },
+  "improvement_over_keep_current_speed": 0.427
+}

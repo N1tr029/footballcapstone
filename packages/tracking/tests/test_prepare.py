@@ -14,7 +14,7 @@ from gridiron_tracking.contract import (
 
 
 def clip(attacks="left", los=47.0, with_ball=False, n_frames=12, extra_kit=False,
-         togo=6, ball_measured=0.9):
+         togo=6, ball_measured=0.9, by_source=None):
     """A vision-shaped track: anonymous ids, kit labels, offense behind the line."""
     sign = 1.0 if attacks == "right" else -1.0
     roster, base = {}, {}
@@ -56,7 +56,9 @@ def clip(attacks="left", los=47.0, with_ball=False, n_frames=12, extra_kit=False
     meta = {
         "source": "vision", "rate": 10,
         **({"ball": {"measured_fraction": ball_measured,
-                      "travelled_yards": 30.0}} if with_ball else {}),
+                      "travelled_yards": 30.0,
+                      **({"by_source": by_source} if by_source else {})}}
+           if with_ball else {}),
         "broadcast": {
             "lineOfScrimmage": los,
             "firstDownLine": los - sign * togo,
@@ -374,3 +376,52 @@ def test_the_report_json_matches_the_table(caplog):
     assert d["line_source"] == report.line_source
     assert d["roster"]["after"] == report.roster.after
     assert d["events"]["thrown_at"] == report.events.thrown_at
+
+
+def test_a_carried_ball_is_refused_for_a_pass_in_words_that_say_why():
+    """An attributed ball and a coasted ball both read 0% measured, and they are not
+    the same problem. Carrier attribution places the ball to about a yard while
+    somebody is holding it, so the track draws a run correctly; it has nothing at
+    all to say while the ball is in the air. Both are refused for a pass review,
+    but a message that only says "the ball was seen on 0% of samples" sends the
+    reader to go improve the detector when the detector is not what is in the way.
+    """
+    out, report = prepare.prepare(clip(
+        with_ball=True, ball_measured=0.0,
+        by_source={"carrier": 90, "coasted": 10},
+    ))
+
+    assert report.ball_attributed == pytest.approx(0.9)
+    assert report.ball_measured == 0.0
+    assert not report.reviewable, "a carried ball still cannot locate a throw"
+
+    mine = [b for b in report.blockers if "attributed" in b]
+    assert mine, f"the carried-ball case was not named; got {report.blockers}"
+    assert "never actually seen" in mine[0]
+    assert "run" in mine[0] and "throw" in mine[0]
+    # And it must not claim the ball was detected.
+    assert "actually seen on 0%" not in mine[0]
+
+
+def test_a_coasted_ball_still_gets_the_detector_message():
+    """The other side of the branch: no carrier attribution, so the shortfall really
+    is the detector, and the message should still say so."""
+    out, report = prepare.prepare(clip(
+        with_ball=True, ball_measured=0.05,
+        by_source={"detected": 5, "coasted": 95},
+    ))
+    assert report.ball_attributed == 0.0
+    mine = [b for b in report.blockers if "actually seen on 5%" in b]
+    assert mine, f"the sparse-detection message was lost; got {report.blockers}"
+
+
+def test_the_two_ball_shortfalls_are_reported_separately():
+    """Summing them into one 'we have a ball' number loses the distinction that
+    decides what the track can be used for."""
+    out, report = prepare.prepare(clip(
+        with_ball=True, ball_measured=0.1,
+        by_source={"detected": 10, "carrier": 60, "coasted": 30},
+    ))
+    assert report.ball_measured == pytest.approx(0.1)
+    assert report.ball_attributed == pytest.approx(0.6)
+    assert report.to_json()["ball_attributed"] == pytest.approx(0.6)

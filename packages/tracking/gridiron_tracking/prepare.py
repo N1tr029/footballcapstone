@@ -63,6 +63,15 @@ class PrepareReport:
     has_ball: bool = False
     ball_measured: float = 0.0
     """Fraction of ball samples that were actually detected rather than coasted."""
+    ball_attributed: float = 0.0
+    """Fraction that came from carrier attribution — the ball placed on whoever
+    possession says is holding it, rather than seen.
+
+    Tracked apart from ``ball_measured`` because the two fail differently, and the
+    difference decides what the track can be used for. An attributed ball is good
+    while somebody is carrying it and says nothing at all while it is in the air,
+    so it will draw a run correctly and cannot locate a throw. Summing the two into
+    one 'we have a ball' number loses exactly the distinction a caller needs."""
     ball_coverage: float = 0.0
     events: Any = None
     """The derived pass window, or None when one was not looked for."""
@@ -115,6 +124,7 @@ class PrepareReport:
             "line_source": self.line_source,
             "has_ball": self.has_ball,
             "ball_measured": round(self.ball_measured, 3),
+            "ball_attributed": round(self.ball_attributed, 3),
             "ball_coverage": round(self.ball_coverage, 3),
             "ball_travelled": round(self.ball_travelled, 2),
             "reviewable": self.reviewable,
@@ -243,6 +253,9 @@ def prepare(track: PlayTrack, offense: str | None = None) -> tuple[PlayTrack, Pr
     report.has_ball = positioned > 0
     stats = out.meta.get("ball") or {}
     report.ball_measured = float(stats.get("measured_fraction") or 0.0)
+    by_source = stats.get("by_source") or {}
+    n_samples = sum(by_source.values()) or 1
+    report.ball_attributed = round(by_source.get("carrier", 0) / n_samples, 3)
     report.ball_coverage = positioned / len(out.frames) if out.frames else 0.0
     report.ball_travelled = float(stats.get("travelled_yards") or 0.0)
 
@@ -263,15 +276,35 @@ def prepare(track: PlayTrack, offense: str | None = None) -> tuple[PlayTrack, Pr
             f"and nothing about what."
         )
     elif report.ball_measured < MIN_BALL_MEASURED:
-        report.blockers.append(
-            f"the ball was actually seen on {report.ball_measured:.0%} of samples "
-            f"({report.ball_coverage:.0%} of frames carry a position, the rest "
-            f"coasted). Below {MIN_BALL_MEASURED:.0%} the throw and the arrival "
-            f"cannot be located, and a review built on that would be confident and "
-            f"meaningless. A football in a wide broadcast shot is a few pixels and "
-            f"is behind somebody most of the play; the generic sports-ball class "
-            f"was not trained on one."
-        )
+        # Two different shortfalls reach this branch and they deserve different
+        # sentences. A coasted ball is a filter's guess about something nobody saw.
+        # An attributed ball is a statement that the ball is wherever the carrier
+        # is, which is right to about a yard while someone is carrying it — so the
+        # track is fine for a run and still useless for a throw. Saying only "the
+        # ball was seen on 0% of samples" sends the reader to the detector when
+        # the detector is not the thing standing in the way.
+        if report.ball_attributed >= MIN_BALL_MEASURED:
+            report.blockers.append(
+                f"the ball was never actually seen: {report.ball_attributed:.0%} of "
+                f"samples are attributed to whoever was carrying it, not detected. "
+                f"That places the ball to about a yard while it is being carried, so "
+                f"the track will draw a run correctly and can be exported — but a "
+                f"carried ball has no position while it is in the air, so the throw "
+                f"and the arrival cannot be located and a pass review keyed on this "
+                f"would be confident and meaningless. For a run this blocker is the "
+                f"only thing standing between the clip and a review; for a pass, a "
+                f"ball detector that clears {MIN_BALL_MEASURED:.0%} is needed."
+            )
+        else:
+            report.blockers.append(
+                f"the ball was actually seen on {report.ball_measured:.0%} of samples "
+                f"({report.ball_coverage:.0%} of frames carry a position, the rest "
+                f"coasted). Below {MIN_BALL_MEASURED:.0%} the throw and the arrival "
+                f"cannot be located, and a review built on that would be confident and "
+                f"meaningless. A football in a wide broadcast shot is a few pixels and "
+                f"is behind somebody most of the play; the generic sports-ball class "
+                f"was not trained on one."
+            )
 
     # --- the throw and the arrival --------------------------------------------
     # Last, because it needs the ball and a consolidated roster: the flight test is

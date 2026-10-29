@@ -16,6 +16,10 @@ detect = ["ultralytics>=8.1"]
 vision = ["anthropic>=1.0", "opencv-python>=4.9"]
 # Benchmarking a video model against known tracking.
 vlm = ["google-genai>=2.0"]
+# A second and third reader for the same prompt. Not redundancy for its own sake: a
+# busy endpoint at one provider failed every anchor frame of a clip, and the only
+# fix for that is a reader somewhere else. Qwen-VL speaks the OpenAI wire protocol.
+readers = ["google-genai>=2.0", "openai>=1.40"]
 
 [build-system]
 requires = ["setuptools>=68"]

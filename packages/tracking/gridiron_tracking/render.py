@@ -56,6 +56,7 @@ class RenderResult:
     registration: Any = None
     n_frames: int = 0
     n_boxes: int = 0
+    n_detected: int = 0
     team_separation: float = 0.0
     ball: Any = None
     markers: Any = None
@@ -71,8 +72,15 @@ class RenderResult:
         s = self.spec
         head = f"{s.name}  ({s.title or Path(s.video).name})"
         lines = [head, "-" * len(head)]
-        lines.append(f"  frames            {self.n_frames} decoded, {self.n_boxes} boxes "
-                     f"({self.n_boxes / self.n_frames:.1f} per frame)" if self.n_frames else "  frames  none")
+        if not self.n_frames:
+            lines.append("  frames  none")
+        else:
+            # Two numbers when they differ: what the detector found, and what survived
+            # being projected onto the field. The gap is the sideline and the crowd.
+            box = f"{self.n_detected} boxes ({self.n_detected / self.n_frames:.1f} per frame)"
+            if self.n_boxes != self.n_detected:
+                box += f", {self.n_boxes} on the field"
+            lines.append(f"  frames            {self.n_frames} decoded, {box}")
         if self.track is not None:
             ppf = np.median([len(f.players) for f in self.track.frames]) if self.track.frames else 0
             churn = len(self.track.roster) / ppf if ppf else float("nan")
@@ -554,10 +562,12 @@ def _merge_ball(track: PlayTrack, ball, log) -> None:
     that was because the ball was untracked or because the merge was missing.
 
     Coasted samples are written as well as detected ones, because a ball between
-    two sightings really was somewhere between them. The contract's Ball has no
-    field for how a position was arrived at — unlike a player's o_source — so the
-    proportions go in meta, and a reader who does not check them is trusting a
-    5%-measured ball as though it were a 100%-measured one.
+    two sightings really was somewhere between them. Which of the three a given
+    frame got is on the sample itself, in ``Ball.source`` — the ball's answer to a
+    player's ``o_source`` — and the proportions are summarised in meta as well, so
+    a reader who wants the shape of the whole track does not have to walk it. A
+    reader who checks neither is trusting a 5%-measured ball as though it were a
+    100%-measured one.
     """
     counts = ball.counts()
     written = 0
@@ -782,6 +792,12 @@ def render(spec: ClipSpec, root: Path = RUN_DIR, force=(), log=print) -> RenderR
     # registration rather than a consumer of it.
     boxes, det_stage = _detect(spec, frames, out_dir, force, log)
     res.stages["detect"] = det_stage
+    # Recorded here rather than only after the on-field cut, because the cut needs a
+    # registration and a clip can fail to register. Reporting zero boxes for a clip
+    # that detected five thousand of them points the next hour at the detector
+    # instead of at the thing that actually broke.
+    res.n_detected = sum(len(v) for v in boxes.values())
+    res.n_boxes = res.n_detected
 
     base, field_spec, reg_stage, reg_problems, prop = _register(
         spec, frames, n_src, out_dir, force, log, boxes=boxes)

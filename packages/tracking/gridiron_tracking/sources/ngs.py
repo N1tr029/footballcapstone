@@ -40,6 +40,10 @@ from ..contract import (
 )
 
 # Canonical name -> every spelling seen in a public release, best first.
+BALL_TEAMS = frozenset({"ball", "football"})
+"""What a release calls the ball in its team/club column."""
+
+
 ALIASES: dict[str, tuple[str, ...]] = {
     "game_id": ("gameId", "game_id", "gameKey", "game_key"),
     "play_id": ("playId", "play_id", "playID"),
@@ -216,7 +220,11 @@ def to_play_track(
     flip = pd_.direction == "left"
 
     teams = play["team"].astype(str).str.lower() if "team" in play.columns else pd.Series("?", index=play.index)
-    is_ball = teams == "ball"
+    # The 2017 release calls it "ball" in `team`; the 2025 one calls it "football"
+    # in `club`, which the aliases already fold onto `team`. Matching only the
+    # first spelling silently turned 1928 ball rows of a 2025 week into players --
+    # a 23rd man standing exactly where the ball was, and no ball on any frame.
+    is_ball = teams.isin(BALL_TEAMS)
     players = play[~is_ball]
     ball_rows = play[is_ball]
 

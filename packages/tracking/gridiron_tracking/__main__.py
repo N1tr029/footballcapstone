@@ -361,6 +361,31 @@ def _label(args) -> int:
     return 0
 
 
+def _train_carrier(args) -> int:
+    """Fit the carrier picker, which is how the ball is found without a detector."""
+    from . import carrier
+    from .sources import ngs
+
+    df = ngs.load_tracking(args.csv)
+    keys = df[["game_id", "play_id"]].drop_duplicates().values[:args.plays]
+    print(f"  {len(keys)} plays from {args.csv}")
+    tracks = []
+    for game_id, play_id in keys:
+        try:
+            tracks.append(ngs.to_play_track(df[df.game_id == game_id], play_id=play_id))
+        except Exception:  # noqa: BLE001 - one bad play must not stop the fit
+            continue
+    try:
+        carrier.train(tracks, args.out)
+    except ValueError as e:
+        print(f"  {e}", file=sys.stderr)
+        return 1
+    print(f"\n  Point a clip at it with  track.carrier_weights  in its spec,\n"
+          f"  then read by_source in the run's track.json: 'carrier' is an\n"
+          f"  attribution, not a sighting, and must never be drawn as one.")
+    return 0
+
+
 def _train_ball(args) -> int:
     """Export what has been labelled and fine-tune a football detector on it."""
     from . import labelling
@@ -478,6 +503,15 @@ def main(argv=None) -> int:
     lb.add_argument("--labels", type=Path, default=LABEL_FILE)
     lb.add_argument("--port", type=int, default=4176)
     lb.set_defaults(fn=_label)
+
+    tc = sub.add_parser("train-carrier",
+                        help="fit the who-has-the-ball picker on a release that has one")
+    tc.add_argument("--csv", type=Path, required=True,
+                    help="tracking CSV with football rows (the 2025 release has them; "
+                         "the 2026 one has only where the ball landed)")
+    tc.add_argument("--plays", type=int, default=200)
+    tc.add_argument("--out", type=Path, default=Path("data/labels/carrier.joblib"))
+    tc.set_defaults(fn=_train_carrier)
 
     tb = sub.add_parser("train-ball", help="fine-tune a football detector on the labels")
     tb.add_argument("--frames", type=Path, default=FRAME_DIR)

@@ -203,6 +203,13 @@ class TrackSpec:
     cannot find a football in broadcast footage — see the package README. Point this
     at the output of ``train-ball`` once there is one."""
     ball_class: int = 32
+    carrier: bool = True
+    """Attribute the ball to whoever is holding it, when a fitted picker is there.
+
+    Independent of ``ball``: it reads player positions, not pixels, so it works on a
+    clip with no detector at all and on the frames where the detector finds nothing
+    — which is most of them. See carrier.py for what it is worth."""
+    carrier_weights: str = "data/labels/carrier.joblib"
     """Class index to keep. 32 is COCO's sports ball; a detector fine-tuned by
     ``train-ball`` has one class and it is 0."""
 

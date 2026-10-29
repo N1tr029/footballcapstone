@@ -34,6 +34,7 @@ from typing import Any
 import numpy as np
 
 from . import ball as ballmod
+from . import carrier as carriermod
 from . import field as fieldmod
 from . import verify as verifymod
 from .clips import RUN_DIR, ClipSpec
@@ -601,21 +602,65 @@ def _merge_ball(track: PlayTrack, ball, log) -> None:
         f"{' — STATIC, this is not a ball' if span < MIN_BALL_TRAVEL else ''})")
 
 
+def _carrier(spec: ClipSpec, track: PlayTrack, log):
+    """Where the ball is because somebody is holding it, rather than because it was seen.
+
+    No pixels and no detector. The ball is within a yard of a player on 83% of
+    frames and airborne for about a second a play, so for most of a play finding it
+    is a question of which tracked man has it — see carrier.py.
+    """
+    if not spec.track.carrier:
+        return {}
+    model = carriermod.load(spec.track.carrier_weights)
+    if model is None:
+        log(f"    no carrier model at {spec.track.carrier_weights} "
+            f"— the ball will come from the detector alone")
+        return {}
+    xy, conf = carriermod.carrier_by_t(track, model)
+    if xy:
+        log(f"    carrier: {len(xy)}/{len(track.frames)} frames attributed "
+            f"({100 * len(xy) / max(len(track.frames), 1):.0f}%), "
+            f"median confidence {np.median(list(conf.values())):.2f}")
+    else:
+        log("    carrier: nobody held it with enough confidence on any frame")
+    return xy
+
+
 def _ball(spec: ClipSpec, track: PlayTrack, frames, reg, fps, offset: int, log):
-    """The ball, from the sports-ball class, gated to the field and to a player."""
+    """The ball: a sighting where there is one, the man holding it where there is not."""
+    carrier_xy = _carrier(spec, track, log)
+
+    players: dict[float, np.ndarray] = {}
+    for f in track.frames:
+        players[round(f.t, 3)] = (np.array([[p.x, p.y] for p in f.players.values()])
+                                  if f.players else np.zeros((0, 2)))
+
+    cand: dict[float, list] = {}
+    if spec.track.ball:
+        cand = _ball_candidates(spec, track, frames, reg, fps, offset, log)
+
+    if not cand and not carrier_xy:
+        return None
+
+    bt = ballmod.track_ball([round(f.t, 3) for f in track.frames], cand,
+                            players_by_t=players, carrier_by_t=carrier_xy)
+    log(f"    {bt.summary()}")
+    return bt
+
+
+def _ball_candidates(spec: ClipSpec, track: PlayTrack, frames, reg, fps, offset: int, log):
+    """Sightings from the detector, gated to the field and to a player."""
     try:
         from ultralytics import YOLO
     except ImportError:
-        return None
+        return {}
     model = YOLO(spec.track.ball_weights or spec.detect.weights)
     cand: dict[float, list] = {}
-    players: dict[float, np.ndarray] = {}
     seen = 0
     for f in track.frames:
         src = int(round(f.t * fps)) + offset
         img = frames.get(src)
         key = round(f.t, 3)
-        players[key] = np.array([[p.x, p.y] for p in f.players.values()]) if f.players else np.zeros((0, 2))
         if img is None:
             continue
         boxes = _ball_boxes(model, img, spec)
@@ -630,10 +675,7 @@ def _ball(spec: ClipSpec, track: PlayTrack, frames, reg, fps, offset: int, log):
         f"({spec.track.ball_tiles}x{spec.track.ball_tiles} tiles, "
         f"conf {spec.track.ball_conf}, imgsz {spec.track.ball_imgsz}, "
         f"{'fine-tuned weights' if spec.track.ball_weights else 'generic sports-ball class'})")
-    cand = _drop_static_candidates(cand, log)
-    bt = ballmod.track_ball([round(f.t, 3) for f in track.frames], cand, players_by_t=players)
-    log(f"    {bt.summary()}")
-    return bt
+    return _drop_static_candidates(cand, log)
 
 
 # ------------------------------------------------------------------ the thing
@@ -846,7 +888,7 @@ def render(spec: ClipSpec, root: Path = RUN_DIR, force=(), log=print) -> RenderR
             log(f"    situation: line of scrimmage x={res.markers.line_of_scrimmage:.1f}, "
                 f"offense attacks {res.markers.attacks}")
 
-    if spec.track.ball:
+    if spec.track.ball or spec.track.carrier:
         try:
             res.ball = _ball(spec, out.track, frames, src_reg, fps, offset, log)
         except Exception as e:  # noqa: BLE001 - a missing ball must not cost the video

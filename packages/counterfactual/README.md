@@ -5,12 +5,13 @@ should have been called, and what would have happened.
 
 Two things live here.
 
-**`decision_engine.py`** trains x/y next-frame regressors on the NFL Big Data Bowl
-2025 full-play tracking release. At each `pass_arrived` frame it predicts a
-location for every tracked player and writes the original tracking columns to
-`reports/player_locations_2025.csv`, alongside typed per-play and frontend
-suggested-play exports. Alternatives are restricted to WR/TE/RB/FB using
-`players.csv` joined by `nflId`.
+**`decision_engine.py`** reviews pass plays on the NFL Big Data Bowl 2025 release
+(all 22 players, whole play). It freezes every player at the moment of the throw,
+forecasts where each will be when the ball arrives, and asks whether a route
+runner other than the targeted receiver was projected to be clearly more open. It
+writes a typed report per play and a replay per pass for the Unity app. Details
+under [Decision review](#decision-review). Its 2026 `decisions()` function is kept
+unchanged for the `whatif` command below.
 
 **`gridiron_counterfactual/`** is the part that connects it to everything else. The
 prototype speaks the competition's dialect — its column names, its coordinates, its
@@ -69,19 +70,88 @@ one as the other would mislabel it in every view at once.
 
 ## Decision review
 
-The CLI fits and saves `models/location_model_2025.joblib` from consecutive
-player frames in the selected 2025 games. It predicts each player's x/y at the
-pass-forward frame from that player's immediately preceding tracked state. The
-location CSV retains the source tracking schema; x and y are modeled predictions
-and the other columns describe the corresponding measured pass-forward row. A
-typed per-play review is written separately. The `gridiron_counterfactual` video
-adapter remains a separate bridge and expects its existing model bundle/schema.
+```
+tracking at the throw ──> forecast at the catch ──> separation per receiver ──> verdict + reason
+                                                                             └─> replay for Unity
+```
+
+### The forecast
+
+For every player on every pass, the inputs are his state at the throw (position
+relative to the line, speed, acceleration, direction, facing), where he was 0.5 s
+and 1 s earlier, how long the ball will be in the air, which side he's on, whether
+he ran a route, his position group, and where the nearest opponent is. The target is
+how far he moves before the ball arrives. Two gradient-boosted regressors (x and y)
+are saved to `models/forecast_2025.joblib`.
+
+Nothing after the throw goes in, so the forecast judges the throw from the
+quarterback's side of it. It does not get the ball's landing spot either: defenders
+are forecast from their own momentum, not from where the pass actually went.
+
+Scored on whole weeks the model was not trained on (leave one week out, weeks 1-9,
+6,792 passes, 149,424 player positions):
+
+| | mean error at the catch | median | 90th percentile |
+|---|---|---|---|
+| **forecast** | **0.77 yd** | **0.48 yd** | **1.66 yd** |
+| keep running at current speed | 1.34 yd | 0.88 yd | 2.90 yd |
+| stand still | 3.05 yd | 2.32 yd | 6.14 yd |
+
+That is 43% less error than the speed baseline. `reports/forecast_2025_evaluation.json`
+holds the numbers from the last run.
+
+### The verdict
+
+Separation is a player's distance to the nearest defender, from the forecast
+positions at the catch.
+
+| verdict | when |
+|---|---|
+| `consider_alternative` | a route runner is projected **5+ yards** more open than the target |
+| `target_was_reasonable` | nobody is |
+| `suggest_run_play` / `suggest_punt` (4th down) | nobody, target included, is projected 3+ yards clear |
+| `suggest_pass_next_time` | a run that lost yards, gained nothing, or came up short on 3rd/4th down (play-by-play only) |
+
+Alternatives must have run a route (`player_play.wasRunningRoute`), must not be the
+quarterback, and must be past the line of scrimmage when the ball arrives, so a wide
+open 2-yard checkdown can't "beat" a downfield completion.
+
+Checked against what actually happened, across weeks 1-9:
+
+- projected separation at the catch tracks measured separation closely (correlation
+  0.94 for the target)
+- about 11% of throws are flagged; flagged throws completed 64% of the time vs 84%
+  for the rest
+- but flagged throws' expected points are only slightly lower (+0.35 vs +0.40):
+  being open predicts *completion* well, not *value*. Catch probability and what a
+  catch is worth (the receiver what-if model in PR #6) are what would close that gap.
+
+The `probabilities` on a report are fixed heuristic values, not fitted, and
+`confidence` is a rough flag. None of this says what the quarterback saw.
+
+### Outputs
+
+| file | what |
+|---|---|
+| `reports/decisions.jsonl` / `.csv` | one report per play of the reviewed game, with the reason in plain English and evidence (projected and actual separation, frames, ids) |
+| `reports/suggested_plays.jsonl` | one replay per reviewed pass: recorded tracking from 1 s before the snap to the throw, then the forecast, with the ball flying in a straight line to the recommended receiver. Served by `apps/api` at `/plays/{id}/suggested` |
+| `reports/forecast_2025.csv` | each player's position at the throw, forecast at the catch, and actual at the catch, for the reviewed game |
+| `reports/forecast_2025_evaluation.json` | held-out error of the forecast vs the baselines |
+| `models/forecast_2025.joblib` | the forecast, trained on every week given |
+
+In a replay, frames up to the throw are tracking, untouched. After it, each player
+follows a smooth path from his speed at the throw to his forecast spot, with facing
+following the path (`o_source: from_velocity`). `ball_snap` and `pass_forward` are
+recorded; `pass_arrived` is simulated.
 
 ## Set up
 
-1. Open the competition page while signed in to Kaggle and accept its rules.
-2. On macOS, create and activate a virtual environment with `python3` (the
-   system often has `python3` but no `python` command):
+1. Get the Big Data Bowl 2025 files from Kaggle (accept the competition rules
+   first). Either the whole download, or the smaller subset that
+   `make_bdb_subset.py` writes (the throw, the catch and 1 s of history for every
+   pass, plus full tracking for game 2022090800) works.
+2. Install, with scikit-learn pinned to 1.8 because its saved models don't load
+   across minor versions:
 
    ```bash
    python3 -m venv .venv
@@ -89,75 +159,23 @@ adapter remains a separate bridge and expects its existing model bundle/schema.
    python -m pip install -r requirements.txt
    ```
 
-3. Download the competition files into `data/` with KaggleHub:
+3. Run it (about a minute on all nine weeks):
 
    ```bash
-   python -c "import kagglehub; path = kagglehub.competition_download('nfl-big-data-bowl-2025', output_dir='data'); print('Downloaded to:', path)"
+   python decision_engine.py --data-dir path/to/big-data-bowl-2025
    ```
 
-   If this raises `kagglehub.exceptions.UnauthenticatedError`, authenticate
-   once in the same environment and then rerun the download:
+   `--game-id` picks the game to write reports and replays for (default
+   2022090800, the one the Unity app ships with), `--weeks` limits the data,
+   `--advantage-yards` changes the 5-yard bar. Outputs go to `reports/` and
+   `models/` next to the script.
 
-   ```bash
-   python -c "import kagglehub; kagglehub.login()"
-   ```
-
-   Enter the API token from [Kaggle account settings](https://www.kaggle.com/settings/api).
-   You must be signed in to Kaggle and have accepted the competition rules (step 1).
-   Alternatively, configure a token using one of the methods in the
-   [KaggleHub authentication guide](https://github.com/Kaggle/kagglehub#authenticate).
-   The files may be nested inside an outer Kaggle download folder; the loader
-   searches recursively for `tracking_week_1.csv`, `plays.csv`, and `player_play.csv`.
-
-4. Review up to four games from week 1:
-
-   ```bash
-   python decision_engine.py --data-dir data --weeks 1 --max-games 4
-   ```
-
-   If you don't activate the environment, use `.venv/bin/python` in place of
-   `python` for the install and run commands.
-
-   The script saves the model, one predicted location row per player at ball
-   arrival in `reports/player_locations_2025.csv`, per-play `decisions.csv` and
-   `decisions.jsonl`, and frontend `suggested_plays.jsonl` plus CSV. Use
-   `--locations-output`, `--suggested-output`, and `--model-output` to choose
-   other destinations. `--weeks` and `--max-games`
-   control which data is loaded and which games train the model.
-
-## What the prototype says
-
-For each pass, the model predicts every player's x/y at the `pass_arrived` frame.
-The separate review measures each offensive player's distance to the nearest
-defender using those predicted positions and compares the intended receiver with
-other offensive players. If another player is at least 1.5 yards more separated,
-the report suggests considering that alternative. This is a transparent geometric
-heuristic, not a learned definition of a good decision.
-
-The report includes play context such as down and yards to go from `plays.csv`.
-The 2025 tracking release does not label quarterback decision quality, so these
-comparisons do not establish what the quarterback saw or whether another throw
-would have succeeded. The separation threshold is a review heuristic, not a
-calibrated probability.
-
-These reports are exploratory. The competition files focus on player movement,
-not labeled quarterback decision quality. Tracking data alone cannot establish
-what the quarterback saw, whether the pass was catchable, or what would have
-happened after a different throw. Treat `confidence` as a rough sample-coverage
-flag, not a calibrated probability. The script does not claim a causal “should
-have thrown elsewhere” answer.
-
-### Player coverage
-
-The 2025 release's `tracking_week_N.csv` files contain player locations across
-the play. The model forecasts every player row present at pass arrival, retaining
-the source columns in its CSV. Players absent from the tracking frame cannot be
-forecast from this dataset.
+Keep the Kaggle files out of git: the repository is public.
 
 ## Files
 
-- `decision_engine.py` — train on 2025 tracking, emit per-player predicted
-  pass-arrival locations, and write typed per-play and frontend suggestions.
-- `requirements.txt` — minimal Python dependencies.
-- `data/`, `models/`, and `reports/` — local Kaggle data and generated outputs;
-  these are excluded from version control.
+- `decision_engine.py` — the 2025 forecast and review, and the 2026 `decisions()`
+  the `whatif` command uses.
+- `requirements.txt` — dependencies.
+- `models/` — `forecast_2025.joblib` (2025) and `coordinate_model.joblib` (2026, for `whatif`).
+- `reports/` — generated outputs listed above.

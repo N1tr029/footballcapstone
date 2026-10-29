@@ -66,7 +66,7 @@ every run, so to serve several games, export each into its own subfolder.
 ## Suggested plays
 
 `decision_engine.py` writes `reports/suggested_plays.jsonl`: per play, the recorded
-frames up to the throw, then the model's predicted frames, a ball, events, and the
+frames up to the throw, then the model's forecast frames, a ball, events, and the
 reason for its recommendation. `api/suggested.py` converts each line to Hindsight
 play JSON, flipping plays that go left the same way Hindsight's exporter does.
 Besides the usual fields, a suggested play has:
@@ -82,9 +82,12 @@ Besides the usual fields, a suggested play has:
 | `players[].oSource` on frames | `measured` on recorded frames, `assumed` on predicted ones (body angle is carried from the last recorded frame). |
 
 Unity ignores fields beyond schemaVersion 1 until `PlayData` declares them.
-The source data has no jersey numbers, team abbreviations, quarter or clock:
-clubs are `OFF` and `DEF`, numbers are 0. Down and distance come from
-`decisions.jsonl` when it has the play.
+
+The current suggested plays come from the 2025 release and carry real clubs,
+jersey numbers, quarter, clock, down and distance, for game 2022090800, the same
+game as the replays, so `/compare` has the real play and the suggested one side by
+side. The converter still reads the older 2026 payloads, which have none of that:
+clubs `OFF` and `DEF`, jersey numbers 0, down and distance from `decisions.jsonl`.
 
 To produce the file, run `decision_engine.py` (Landon's README has the command)
 and copy `reports/suggested_plays.jsonl` to `SUGGESTED_PATH`, then `POST /admin/reload`.
@@ -108,17 +111,9 @@ then `POST /admin/reload` (or restart) to pick them up.
 
 ## Known gaps
 
-Hindsight exports Big Data Bowl **2025** (2022 season) and the play model reviews
-Big Data Bowl **2026** (2023 season), so no play currently has both a replay and
-a review. `/recommendations` lists what is reviewed. Lining these up means one
-side moving to the other's release.
-
-`suggested_plays.jsonl` is not in the repository yet: `suggested_play_rows` and
-`build_suggested_play_payload` are in Landon's ML repository, newer than the copy
-in `packages/counterfactual`, and the file is produced by running them on the
-Kaggle data. Until it exists, `/suggested` is empty and `/plays/{id}/suggested`
-returns 404. The tests run the conversion on output from Landon's own code
-(`tests/fixtures_suggested.jsonl`).
+The play model reviews one game at a time (game 2022090800 by default), so
+`/suggested` and `/recommendations` cover that game. Rerun `decision_engine.py
+--game-id` for another one.
 
 ## Tests
 

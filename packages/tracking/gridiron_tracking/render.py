@@ -43,7 +43,7 @@ from .detect import Detection
 from .pipeline import PipelineConfig, run as run_pipeline
 from .video import VideoSource
 
-TEAM_COLORS = {"teamA": (59, 169, 242), "teamB": (232, 168, 79), "other": (150, 150, 150)}
+TEAM_COLORS = {"teamA": (242, 169, 59), "teamB": (79, 208, 242), "other": (150, 150, 150)}
 
 
 @dataclass
@@ -328,7 +328,7 @@ def _label_kits(spec: ClipSpec, frames, boxes, log) -> float:
     Its only job is to make two crossing players distinguishable to the matcher, which
     distance alone cannot do.
     """
-    from .detect.color import cluster_teams, separation, torso_color
+    from .detect.color import cluster_teams, separation, kit_color
 
     samples, index = {}, []
     for fi, dets in boxes.items():
@@ -336,7 +336,7 @@ def _label_kits(spec: ClipSpec, frames, boxes, log) -> float:
         if img is None:
             continue
         for k, d in enumerate(dets):
-            c = torso_color(img, d)
+            c = kit_color(img, d)
             if c is None:
                 continue
             key = f"{fi}:{k}"
@@ -346,10 +346,14 @@ def _label_kits(spec: ClipSpec, frames, boxes, log) -> float:
         return 0.0
     assign, centres = cluster_teams(samples, k=spec.track.team_clusters)
     sizes = {c: sum(1 for v in assign.values() if v == c) for c in set(assign.values())}
-    ranked = sorted(sizes, key=lambda c: -sizes[c])
+    ranked = sorted(sizes, key=lambda c: -float(centres[c][0]))
     naming = {c: n for c, n in zip(ranked, ["kitA", "kitB", "kitC"])}
     for fi, k, key in index:
-        boxes[fi][k].team = naming.get(assign.get(key))
+        distances = np.sort(np.linalg.norm(centres - samples[key][0], axis=1))
+        # An ambiguous torso (often two overlapping players) must not repeatedly
+        # change the online track's identity vote.
+        certain = len(distances) > 1 and distances[1] - distances[0] > 20
+        boxes[fi][k].team = naming.get(assign.get(key)) if certain else None
     sep = separation(np.array([centres[c] for c in ranked[:2]])) if len(ranked) >= 2 else 0.0
     log(f"    kits before tracking: {dict((naming[c], sizes[c]) for c in ranked)}, "
         f"separation {sep:.0f} Lab units")
@@ -371,14 +375,16 @@ def _teams(spec: ClipSpec, track: PlayTrack, frames, rects, reg, fps: float,
     once however many frames it was seen in, so a lineman held in shot for the whole play
     does not outvote a receiver who ran out of frame.
 
-    The colour itself is pooled in Lab across the play — one frame of a man in shadow or
-    turned away cannot flip him when forty others disagree.
+    Initial kit centres provide a prior; a temporal median of exclusive jersey/pants
+    crops can correct a track that switched people, while capacity bounds prevent a
+    crowded frame inventing a thirteenth player on one side.
     """
-    from .detect.color import cluster_teams, separation, torso_color
+    from .detect.color import cluster_teams, separation, kit_color
     from .detect import Detection
 
     samples: dict[str, list] = {}
-    for f in track.frames:
+    observations = [{} for _ in track.frames]
+    for frame_index, f in enumerate(track.frames):
         src = int(round(f.t * fps)) + offset
         img = frames.get(src)
         boxes = rects.get(src)
@@ -389,20 +395,25 @@ def _teams(spec: ClipSpec, track: PlayTrack, frames, rects, reg, fps: float,
             continue
         ids = list(f.players)
         px = np.atleast_2d(h.to_image([[f.players[i].x, f.players[i].y] for i in ids]))
-        for pid, p in zip(ids, px):
+        matched, _, _ = verifymod.assign(px, boxes)
+        for index, box_index in matched.items():
+            pid, p = ids[index], px[index]
             if not np.isfinite(p).all():
                 continue
             # The box this player is standing in, if any. A position that reprojects onto
             # nobody has no kit to read, and guessing from the grass underneath is worse
             # than not voting.
-            hit = next((b for b in boxes if b[0] <= p[0] <= b[2] and b[1] <= p[1] <= b[3]), None)
-            if hit is None:
-                continue
+            hit = boxes[box_index]
             d = Detection(frame=src, x1=hit[0], y1=hit[1], x2=hit[2], y2=hit[3])
-            c = torso_color(img, d)
+            c = kit_color(img, d)
             if c is None:
                 continue
-            samples.setdefault(pid, []).append(c[1:] if spec.track.chroma_only else c)
+            c = c[1:] if spec.track.chroma_only else c
+            observations[frame_index][pid] = c
+            # Establish a kit from the first clean second, before tackles and
+            # crossing opponents contaminate a long track's pooled crop.
+            if len(samples.setdefault(pid, [])) < 10:
+                samples[pid].append(c)
 
     if len(samples) < 2:
         log("    teams: not enough torso samples to split")
@@ -410,17 +421,58 @@ def _teams(spec: ClipSpec, track: PlayTrack, frames, rects, reg, fps: float,
 
     assign, centres = cluster_teams(samples, k=spec.track.team_clusters)
     sizes = {c: sum(1 for v in assign.values() if v == c) for c in set(assign.values())}
-    ranked = sorted(sizes, key=lambda c: -sizes[c])
-    naming = {c: n for c, n in zip(ranked, ["teamA", "teamB", "other"])}
-    for pid, cl in assign.items():
-        if pid in track.roster:
-            track.roster[pid].team = naming.get(cl, "other")
+    ranked = sorted(sizes, key=lambda c: -float(centres[c][0]))
+    from .teams import constrained_teams, split_team_changes
+
+    full = None
+    if spec.track.full_roster_frame is not None:
+        full = min(range(len(track.frames)), key=lambda i: abs(
+            track.frames[i].t * fps + offset - spec.track.full_roster_frame))
+    probabilities = {}
+    for pid, colors in samples.items():
+        representative = np.median(colors, axis=0)
+        dist = np.array([np.linalg.norm(representative - centres[c]) for c in ranked[:2]])
+        likelihood = np.exp(-dist ** 2 / (2 * 35 ** 2))
+        probabilities[pid] = likelihood / max(float(likelihood.sum()), 1e-12)
+    labels = constrained_teams(probabilities, [f.players for f in track.frames],
+                               capacity=spec.track.max_team_players, full_frame=full)
+    labels_by_frame = []
+    for fi, f in enumerate(track.frames):
+        current = {}
+        for pid in f.players:
+            nearby = [observations[j][pid]
+                      for j in range(max(0, fi-2), min(len(track.frames), fi+3))
+                      if pid in observations[j]]
+            prior = np.array([.8, .2] if labels.get(pid) == "teamA" else
+                             [.2, .8] if labels.get(pid) == "teamB" else [.5, .5])
+            if nearby:
+                color = np.median(nearby, axis=0)
+                dist = np.array([np.linalg.norm(color-centres[c]) for c in ranked[:2]])
+                likelihood = np.exp(-dist ** 2 / (2 * 35 ** 2))
+                likelihood /= max(float(likelihood.sum()), 1e-12)
+                current[pid] = .9 * likelihood + .1 * prior
+            else:
+                current[pid] = prior
+        labels_by_frame.append(constrained_teams(
+            current, [f.players], capacity=spec.track.max_team_players,
+            full_frame=0 if fi == full else None))
+    splits = split_team_changes(track, labels_by_frame)
+    track.meta["teams"] = {
+        "method": "exclusive torso/pants matches, temporal median, per-frame roster constraints",
+        "identity_splits_from_jersey_conflict": splits,
+        "max_players_per_team": spec.track.max_team_players,
+        "full_roster_source_frame": spec.track.full_roster_frame,
+        "equal_counts_required_only_at_full_roster_frame": full is not None,
+        "unknown_identities": sum(p.team == "unknown" for p in track.roster.values()),
+    }
 
     # The separation that matters is between the two *teams*. Taking the closest of all
     # three pairs reports how near the officials sit to a kit, which is not the question.
     sep = separation(np.array([centres[c] for c in ranked[:2]])) if len(ranked) >= 2 else 0.0
-    counts = {n: sum(1 for p in track.roster.values() if p.team == n) for n in set(naming.values())}
-    log(f"    teams: {counts} from {len(samples)} tracks, separation {sep:.0f} Lab units")
+    maxima = {team: max(sum(track.roster[p].team == team for p in f.players)
+                        for f in track.frames) for team in ("teamA", "teamB")}
+    log(f"    teams: max simultaneous {maxima}, {splits} jersey changes split, "
+        f"separation {sep:.0f} Lab units")
     return sep
 
 
@@ -599,6 +651,10 @@ def _merge_ball(track: PlayTrack, ball, log) -> None:
         "by_source": counts,
         "measured_fraction": round(measured / total, 3),
         "travelled_yards": round(span, 2),
+        "method": ball.method or "learned detector and/or carrier attribution",
+        "image_observations": {str(k): v for k, v in ball.image_observations.items()},
+        "visible_source_frames": len(ball.image_observations),
+        "flight_projection": "ground-plane projection of image sightings; altitude is not recovered",
         "note": (
             "A football in a wide broadcast shot is a few pixels and is behind "
             "somebody most of the play. Read measured_fraction AND travelled_yards "
@@ -608,8 +664,7 @@ def _merge_ball(track: PlayTrack, ball, log) -> None:
         ),
     }
     log(f"    ball merged onto {written}/{len(track.frames)} frames "
-        f"({100 * measured / total:.0f}% seen, travelled {span:.1f} yd"
-        f"{' — STATIC, this is not a ball' if span < MIN_BALL_TRAVEL else ''})")
+        f"({100 * measured / total:.0f}% seen, visible span {span:.1f} yd)")
 
 
 def _carrier(spec: ClipSpec, track: PlayTrack, log):
@@ -636,7 +691,8 @@ def _carrier(spec: ClipSpec, track: PlayTrack, log):
     return xy
 
 
-def _ball(spec: ClipSpec, track: PlayTrack, frames, reg, fps, offset: int, log):
+def _ball(spec: ClipSpec, track: PlayTrack, frames, reg, fps, offset: int, log,
+          rects=None):
     """The ball: a sighting where there is one, the man holding it where there is not."""
     carrier_xy = _carrier(spec, track, log)
 
@@ -648,6 +704,29 @@ def _ball(spec: ClipSpec, track: PlayTrack, frames, reg, fps, offset: int, log):
     cand: dict[float, list] = {}
     if spec.track.ball:
         cand = _ball_candidates(spec, track, frames, reg, fps, offset, log)
+
+    observations = {}
+    if spec.track.ball_motion:
+        from .ball_motion import detect
+
+        flights = detect(frames, rects or {}, reg, fps)
+        observations = {p.frame: p.to_json() for flight in flights for p in flight}
+        log(f"    motion ball: {len(flights)} flights, {len(observations)} visible source frames")
+        # A confirmed flight's own pixels take precedence over an unvalidated
+        # learned candidate. Keep missing portions unknown, including after catch.
+        if observations:
+            bt = ballmod.BallTrack(image_observations=observations,
+                                   method="isolated brown object, camera-compensated sustained flight")
+            for f in track.frames:
+                src = int(round(f.t * fps)) + offset
+                point = observations.get(src)
+                if point:
+                    x, y = point["field"]
+                    bt.samples.append(ballmod.BallSample(f.t, x, y, "detected", point["confidence"]))
+                else:
+                    bt.samples.append(ballmod.BallSample(f.t, float("nan"), float("nan"), "none"))
+            log(f"    {bt.summary()}")
+            return bt
 
     if not cand and not carrier_xy:
         return None
@@ -869,6 +948,13 @@ def render(spec: ClipSpec, root: Path = RUN_DIR, force=(), log=print) -> RenderR
         if n:
             log(f"    dropped {n} tracks that never moved off a sideline")
     res.track = out.track
+    out.track.meta.setdefault("play_id", spec.name)
+    out.track.meta["clip"] = {
+        "name": spec.name, "video": spec.video, "start_frame": spec.start,
+        "stop_frame": spec.stop, "snap_source_frame": spec.snap_frame,
+        "registration_mode": spec.register.mode, "calibration_frame": spec.register.frame,
+        "notes": spec.notes,
+    }
     res.stages["track"] = "computed"
     log(f"    tracked: {len(out.track.roster)} players over {len(out.track.frames)} frames "
         f"({out.tracks_born} born, {out.tracks_kept} kept)")
@@ -904,9 +990,9 @@ def render(spec: ClipSpec, root: Path = RUN_DIR, force=(), log=print) -> RenderR
             log(f"    situation: line of scrimmage x={res.markers.line_of_scrimmage:.1f}, "
                 f"offense attacks {res.markers.attacks}")
 
-    if spec.track.ball or spec.track.carrier:
+    if spec.track.ball or spec.track.ball_motion or spec.track.carrier:
         try:
-            res.ball = _ball(spec, out.track, frames, src_reg, fps, offset, log)
+            res.ball = _ball(spec, out.track, frames, src_reg, fps, offset, log, rects)
         except Exception as e:  # noqa: BLE001 - a missing ball must not cost the video
             res.problems.append(f"ball tracking failed: {type(e).__name__}: {e}")
         if res.ball is not None:
@@ -918,7 +1004,13 @@ def render(spec: ClipSpec, root: Path = RUN_DIR, force=(), log=print) -> RenderR
         team_colors=TEAM_COLORS,
         ball_seen_at=(lambda t: (res.ball.at(t) or ballmod.BallSample(t, 0, 0, "none")).measured)
         if res.ball else None,
+        ball_observations=res.ball.image_observations if res.ball else None,
     )
+    if res.ball is not None and res.ball.image_observations:
+        from .ball_motion import write_preview
+
+        write_preview(out_dir / "ball-preview.mp4", frames, res.ball.image_observations,
+                      src_reg, fps)
     res.stages["render"] = "computed"
 
     # Everything the render wants to complain about, written into the file rather
@@ -928,9 +1020,21 @@ def render(spec: ClipSpec, root: Path = RUN_DIR, force=(), log=print) -> RenderR
     # with nothing in it to say the yards were fiction. A consumer reading the file
     # had no way to know, which is the whole failure mode this package is arranged
     # against.
+    paint_audit = {}
+    if prop is not None:
+        scores = prop.paint_drift(frames, field_spec, every=max(1, len(frames) // 10))
+        paint_audit = {str(k): float(v) if np.isfinite(v) else None for k, v in scores.items()}
+        failed = [k for k, v in scores.items() if np.isfinite(v) and v < spec.register.min_paint]
+        if failed:
+            res.problems.append(
+                f"field paint alignment below {spec.register.min_paint:.2f}x on "
+                f"{len(failed)}/{len(scores)} sampled frames; first at frame {failed[0]}"
+            )
     out.track.meta["render_problems"] = list(res.problems)
     out.track.meta["registration"] = registration_verdict(
         res.problems, res.stages.get("register"))
+    if paint_audit:
+        out.track.meta["registration"]["paint_alignment_samples"] = paint_audit
     (out_dir / "track.json").write_text(json.dumps(out.track.to_json()))
     report_txt = res.report.table()
     if res.markers is not None and res.markers.samples:

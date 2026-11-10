@@ -53,14 +53,26 @@ from typing import Any, Literal
 import numpy as np
 
 from .. import field as fieldmod
+from .local import DEFAULT_MODEL
 
-MODEL = "claude-opus-5"
+MODEL = f"mlx:{DEFAULT_MODEL}"
 GEMINI_MODEL = "gemini-flash-latest"
 QWEN_MODEL = "qwen3-vl-plus"
 QWEN_BASE_URL = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
-"""DashScope's OpenAI-compatible endpoint. The Singapore host; the Beijing one is
-``dashscope.aliyuncs.com`` and a key is only valid on the region it was issued for,
-so ``DASHSCOPE_BASE_URL`` overrides this."""
+"""DashScope's OpenAI-compatible endpoint, and a last resort rather than the one to
+use.
+
+**Set ``DASHSCOPE_BASE_URL`` instead.** A workspace now gets its own inference domain,
+shown beside the key when it is created and looking like
+``https://ws-<id>.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1``. That is the
+one to put in ``.env``: the shared ``dashscope.aliyuncs.com`` host this falls back to
+went into maintenance on 30 September 2026 and takes no new features, so a model added
+after that date can 404 here while working perfectly on the workspace domain — which
+presents as the model being unavailable rather than as the URL being stale.
+
+Regions do not mix either. This is the Singapore host, the Beijing one is
+``dashscope.aliyuncs.com``, and a key only works against the region it was issued for.
+"""
 
 FALLBACKS: dict[str, tuple[str, ...]] = {
     "gemini-flash-latest": ("gemini-3-flash-preview",),
@@ -106,6 +118,8 @@ endpoint at the same time and un-jittered backoff keeps them in lockstep."""
 # tuning a prompt is the model.
 def backend_for(model: str) -> str:
     m = (model or "").lower()
+    if m.startswith("mlx:"):
+        return "mlx"
     if m.startswith(("gemini", "models/gemini")):
         return "gemini"
     if m.startswith(("qwen", "qvq")):
@@ -176,8 +190,8 @@ try:
             "goal_line", "end_zone_back", "far_sideline", "near_sideline",
             "far_hash_row", "near_hash_row",
         ] = Field(description="Which line this is. A goal line is where the solid end-zone paint begins; an end zone back is the outer edge of that paint. Hash rows are the two dashed lines running down the middle of the field.")
-        p1: list[float] = Field(description="A rough point on this line as [across, down], both FRACTIONS between 0.0 and 1.0 — never pixels. Pick a point near one end of the visible stretch.")
-        p2: list[float] = Field(description="A second rough point on the same line, in the same units, near the other end of the visible stretch. Further apart is better.")
+        p1: list[float] = Field(min_length=2, max_length=2, description="A rough point on this line as [across, down], both FRACTIONS between 0.0 and 1.0 — never pixels. Pick a point near one end of the visible stretch.")
+        p2: list[float] = Field(min_length=2, max_length=2, description="A second rough point on the same line, in the same units, near the other end of the visible stretch. Further apart is better.")
         confidence: Literal["certain", "probable", "guess"] = Field(description="How sure you are this line is what you say it is.")
 
     class FieldReading(BaseModel):
@@ -193,13 +207,13 @@ try:
         camera_view: Literal["sideline_low", "sideline_elevated", "endzone", "corner", "unclear"] = Field(description="Where the camera appears to be. 'sideline_low' means roughly at player height in the stands; 'sideline_elevated' means a press box or high tripod looking down.")
         level: Literal["nfl", "college", "high_school", "unclear"] = Field(description="What level of football. This sets the hash mark spacing, so say 'unclear' rather than guessing — a wrong answer here moves every player sideways.")
         team_colors: list[str] = Field(description="Plain colour names for the two teams' jerseys, e.g. ['white', 'navy']. Empty if you cannot tell them apart.")
-        notes: str = Field(description="Anything that would make registering this frame hard: occlusion, glare, worn paint, a camera that is panning, only part of the field visible.")
+        notes: str = Field(max_length=500, description="Briefly describe anything that would make registering this frame hard: occlusion, glare, worn paint, a camera that is panning, only part of the field visible.")
 
     class FitCheck(BaseModel):
         """The model's verdict on a drawn field model."""
 
         verdict: Literal["good", "close", "wrong"] = Field(description="'good' if the drawn lines sit on the real paint; 'close' if they are within about a line's width; 'wrong' if they are clearly off.")
-        problem: str = Field(description="If not good, what is wrong in plain terms — 'the drawn lines are one yard line to the left', 'the field is too narrow', 'rotated'. Empty string if good.")
+        problem: str = Field(max_length=500, description="If not good, what is wrong in plain terms — 'the drawn lines are one yard line to the left', 'the field is too narrow', 'rotated'. Empty string if good.")
         off_by_yards: float | None = Field(default=None, description="If the drawing looks shifted along the field, roughly how many yards, signed. Null if you cannot tell or it is not a simple shift.")
 
     HAVE_PYDANTIC = True
@@ -367,7 +381,7 @@ def _ask(client, img, prompt: str, schema, max_tokens: int = 4000,
     Returns the last failure if every attempt fails, so the caller still sees a real
     diagnosis rather than a generic one.
     """
-    model = model or MODEL
+    model = model or os.environ.get("FOOTBALL_VISION_MODEL") or MODEL
     chain = [model, *(FALLBACKS.get(model, ()) if model_chain is None else model_chain)]
 
     last = VisionResult(None, "", "no attempt was made")
@@ -406,6 +420,8 @@ def _ask_once(client, img, prompt: str, schema, max_tokens: int,
     and never reaches the wire — the two were one name until they collided.
     """
     backend = backend_for(model)
+    if backend == "mlx":
+        return _ask_mlx(img, prompt, schema, model=model, max_tokens=max_tokens)
     if backend == "gemini":
         return _ask_gemini(img, prompt, schema, model=model, max_tokens=max_tokens)
     if backend == "qwen":
@@ -598,18 +614,39 @@ def _ask_qwen(img, prompt: str, schema, model: str, max_tokens: int = 4000) -> V
         return VisionResult(None, txt, f"could not parse the answer: {type(e).__name__}: {e}")
 
 
+def _ask_mlx(img, prompt: str, schema, model: str, max_tokens: int = 4000) -> VisionResult:
+    """Read locally on Apple Silicon, with the same schema and geometry checks."""
+    try:
+        from .local import generate_json
+
+        txt, tokens = generate_json(img, SYSTEM, prompt, schema.model_json_schema(),
+                                    model=model.removeprefix("mlx:"), max_tokens=max_tokens)
+    except Exception as e:  # noqa: BLE001 - actionable setup/runtime errors reach the caller
+        return VisionResult(None, "", f"local vision: {type(e).__name__}: {e}")
+    if tokens >= max_tokens:
+        return VisionResult(None, txt, f"the local answer was truncated at the {max_tokens}-token cap")
+    # Some instruction models wrap otherwise valid JSON in a Markdown fence.
+    cleaned = txt.strip()
+    if cleaned.startswith("```") and cleaned.endswith("```"):
+        cleaned = cleaned.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+    try:
+        return VisionResult(schema.model_validate(json.loads(cleaned)), txt)
+    except Exception as e:  # noqa: BLE001
+        return VisionResult(None, txt, f"could not parse the local answer: {type(e).__name__}: {e}")
+
+
 def read_field(img, client=None, **extra) -> VisionResult:
     """Ask the model what it can see on this field."""
     if not HAVE_PYDANTIC:
         return VisionResult(None, "", "pydantic is required for structured output")
-    return _ask(_client(client), img, READ_PROMPT, FieldReading, **extra)
+    return _ask(client, img, READ_PROMPT, FieldReading, **extra)
 
 
 def check_fit(img_with_overlay, client=None, **extra) -> VisionResult:
     """Show the model the fitted field model and ask whether it lands on the paint."""
     if not HAVE_PYDANTIC:
         return VisionResult(None, "", "pydantic is required for structured output")
-    return _ask(_client(client), img_with_overlay, CHECK_PROMPT, FitCheck, **extra)
+    return _ask(client, img_with_overlay, CHECK_PROMPT, FitCheck, **extra)
 
 
 # ------------------------------------------------------- semantics to geometry

@@ -132,13 +132,92 @@ derived from a guess.
 `provenance.coordinates`, and it says it differently depending on whether the
 coordinates came from a tracking system or from a homography.
 
+## Local vision reader (Apple Silicon)
+
+Automatic field registration defaults to the downloadable
+`mlx-community/Qwen3.5-9B-4bit` model, running through MLX on the Mac.
+It needs no Alibaba, Gemini, or Anthropic API key. Install the runtime and download
+the approximately 6 GB model once, from the repository root. Setup requires
+another 3 GiB of free space for runtime work and swap:
+
+```bash
+.venv/bin/python -m pip install -e './packages/tracking[local-vision]'
+.venv/bin/python scripts/setup_local_vision.py
+.venv/bin/python -m gridiron_tracking render nfl_sf_sea --force register
+```
+
+Weights live in the ignored `data/models/hub` directory. After setup, inference
+loads cached files only and works offline. The model stays loaded across frames;
+concurrent clips share it rather than loading another copy. The local reader
+requires an Apple Silicon Mac; the rest of the tracking package remains portable.
+
+To reuse models downloaded for another project, set `FOOTBALL_LOCAL_MODELS_DIR`
+to the directory containing the model folders (for example, a folder named
+`Qwen3.5-9B-4bit`). Setup detects a populated model folder and skips the download.
+This Mac reuses its existing grader model cache through this setting in `.env`.
+
+`register.model` in a clip spec takes priority. A missing value uses
+`FOOTBALL_VISION_MODEL` (if set), otherwise the local default. For a larger local
+model, download it with `scripts/setup_local_vision.py --model <repository>` and
+set `register.model` to `mlx:<repository>`. `FOOTBALL_MODEL_CACHE` changes the cache
+directory. Hosted readers remain available by explicitly selecting their model.
+
+Local generation is constrained to the JSON schema, including two coordinates
+per landmark endpoint. The same field geometry checks and 1.60x paint alignment bar
+apply to local readings. A successful download does not establish field accuracy;
+unreadable or misaligned clips still need calibration.
+
+The 49ers–Seahawks clip now renders end to end using the checked, assisted
+calibration in `docs/calibration/nfl_sf_sea.json`. Eight inspected paint points
+at source frame 1575 pass the unchanged 1.60x paint bar at 7.84x. The saved spec
+contains that homography; rerunning it needs no hosted model or further clicks.
+Whole-frame Qwen reading remains unreliable on this shot. Rotating a crop of
+the far number row upright produces the correct 30 and 40, which confirmed the
+labels used for the assisted calibration.
+
+The window is source frames 1575–1864, including the film-estimated snap at 1672
+and the tackle. Camera motion follows turf, with players and stationary broadcast
+captions excluded. Tracking stays at 10 Hz; the 12 fps video interpolates display
+positions onto the source clock and lasts 9.67 seconds. Sampled paint checks are
+stored in `track.json` metadata; a null score means insufficient visible paint.
+
+Outputs are in `data/runs/nfl_sf_sea`: `reconstruction.mp4` is the browser-playable
+video, `track.json` is the tracking contract, `report.txt` gives the checks, and
+`export/` contains CSV and JSON with provenance. Reprojection agreement is 83.4%,
+which checks consistency with detections rather than true player identities.
+There are still fragmented identities and players lost to occlusion or camera
+framing. Team colours are blue for light jerseys (SF), yellow for dark jerseys
+(SEA), and gray for uncertain identities. Torso and pants evidence uses exclusive
+matches, initial kit centres, and a temporal median constrained to at most 11
+simultaneous athletes per team. Persistent jersey conflicts split a mixed track
+into separate identities rather than carrying the old colour onto the new person.
+This improves team colours but increases fragmentation; these are still not 22
+continuous player identities. The inspected complete formation at source frame
+1578 is 11/11, with all 22 jerseys visually checked. Cropped frames need not have
+equal counts. `track.full_roster_frame` is an explicit inspected hint, not an
+automatic claim that 22 person detections must be 22 athletes.
+
+The generic ball detector and carrier estimator are disabled for this clip.
+`track.ball_motion` detects isolated brown candidates outside player boxes and
+requires a sustained trajectory after camera compensation. On this clip it finds
+the seven visible flight frames 1772–1778, with no manual ball seed. These are
+stored at source rate under `meta.ball.image_observations`; two sightings fall on
+the contract's 10 Hz grid. The green source-video ring and trail use actual pixel
+sightings. Missing frames, including the ball hidden in a player's hands, stay
+unknown. The field position is a ground-plane projection, not recovered airborne
+height. This is a visually checked pass example, not a validated general detector.
+`ball-preview.mp4` shows the pass at 0.2x speed with enlarged source pixels;
+`ball-tracking.mp4` is its H.264 copy for browser playback.
+
+The isolated `unity/` export is experimental and reports missing player positions;
+it does not replace the Unity application's existing play library.
+
 ## Registering a clip the vision model cannot
 
 `register.mode: auto` asks the vision model and is checked against the painted
 lines; below 1.60x the drawn lines are finding no more paint than chance and the
-clip is refused. It clears that bar on some cameras and not others — a low wide
-sideline shot gives it three usable correspondences and it needs more, and three
-of the eight clips here fail on it. The fallback is a person naming points, which
+clip is refused. A frame may have too few readable or well-spread landmarks for
+automatic registration. The fallback is a person naming points, which
 is what `data/calibrate.html` is for, and these two commands are the steps either
 side of it:
 

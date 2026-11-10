@@ -20,6 +20,8 @@ vlm = ["google-genai>=2.0"]
 # busy endpoint at one provider failed every anchor frame of a clip, and the only
 # fix for that is a reader somewhere else. Qwen-VL speaks the OpenAI wire protocol.
 readers = ["google-genai>=2.0", "openai>=1.40"]
+# Downloaded Qwen-VL, accelerated by Metal on Apple Silicon. No API key required.
+local-vision = ["mlx-vlm==0.4.4; sys_platform == 'darwin' and platform_machine == 'arm64'", "llguidance>=1.7,<2", "opencv-python>=4.12"]
 
 [build-system]
 requires = ["setuptools>=68"]

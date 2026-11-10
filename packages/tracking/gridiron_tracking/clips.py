@@ -150,6 +150,16 @@ class TrackSpec:
     same samples. The officials cost less as a handful of misassigned tracks than a
     halved team does."""
 
+    max_team_players: int = 11
+    """Maximum simultaneously visible players assigned to either team."""
+
+    full_roster_frame: int | None = None
+    """An inspected source frame showing all 22 athletes, excluding officials.
+
+    Only this explicit evidence permits requiring 11 per side. Cropped shots have
+    upper bounds only; seeing 22 person boxes alone does not prove a full formation.
+    """
+
     team_cost: float = 0.0
     """Yards of penalty for matching a detection to a track of the other team. Needs
     ``pre_teams``; without a team on the detections there is nothing to disagree with."""
@@ -184,6 +194,12 @@ class TrackSpec:
     sideline_band: float = 2.0
 
     ball: bool = True
+    ball_motion: bool = False
+    """Find isolated airborne brown objects with a camera-compensated motion track.
+
+    This supplements the learned detector on wide broadcast shots. It makes no
+    claim about a football hidden in a player's hands or behind the line.
+    """
     ball_tiles: int = 3
     """Crops per side for ball detection, as ``detect.tiles`` is for players.
 

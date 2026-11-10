@@ -24,6 +24,12 @@ def test_the_schema_always_offers_a_way_to_say_i_cannot_tell():
     assert r["down_marker_number"].default is None
 
 
+@pytest.mark.parametrize("point", [0.5, [0.5], [0.1, 0.2, 0.3]])
+def test_landmark_endpoints_require_two_coordinates(point):
+    with pytest.raises(ValueError):
+        V.Landmark(kind="far_sideline", p1=point, p2=[0.9, 0.1], confidence="probable")
+
+
 def test_the_prompt_asks_for_structure_before_numbers():
     """Tested on a real night game, not one painted number was legible while the
     sidelines and end zone were obvious. Structure has to come first."""
@@ -231,7 +237,112 @@ def test_running_out_of_output_budget_is_reported_as_itself():
 def test_every_backend_has_a_name_that_routes_to_it():
     assert V.backend_for(V.GEMINI_MODEL) == "gemini"
     assert V.backend_for(V.QWEN_MODEL) == "qwen"
-    assert V.backend_for(V.MODEL) == "anthropic"
+    assert V.backend_for(V.MODEL) == "mlx"
+    assert V.backend_for("claude-opus-5") == "anthropic"
+
+
+def test_local_read_and_verification_need_no_cloud_credentials(monkeypatch):
+    import json
+    from gridiron_tracking.registration import local
+
+    monkeypatch.delenv("FOOTBALL_VISION_MODEL", raising=False)
+    monkeypatch.setattr(V, "_client", lambda *a: pytest.fail("constructed a cloud client"))
+    seen = []
+
+    def generate(img, system, prompt, schema, *, model, max_tokens):
+        seen.append(model)
+        data = (_reading([(40, 0.27), (30, 0.68)]).model_dump()
+                if schema["title"] == "FieldReading"
+                else {"verdict": "good", "problem": ""})
+        return json.dumps(data), 100
+
+    monkeypatch.setattr(local, "generate_json", generate)
+    img = np.zeros((32, 32, 3), np.uint8)
+    read = V.read_field(img)
+    check = V.check_fit(img)
+    assert [n.number for n in read.reading.yard_numbers] == [40, 30]
+    assert check.reading.verdict == "good"
+    assert seen == [V.MODEL.removeprefix("mlx:")] * 2
+
+
+@pytest.mark.parametrize("answer,tokens,expected_error", [
+    ('{"verdict":"good","problem":""}', 5, None),
+    ('```json\n{"verdict":"good","problem":""}\n```', 5, None),
+    ('{"verdict":"good"}', 5, "could not parse"),
+    ('{"verdict":', 20, "truncated"),
+])
+def test_local_answers_must_be_complete_and_match_the_schema(
+        monkeypatch, answer, tokens, expected_error):
+    from gridiron_tracking.registration import local
+
+    monkeypatch.setattr(local, "generate_json", lambda *a, **kw: (answer, tokens))
+    res = V._ask_mlx(None, "p", V.FitCheck, model=V.MODEL, max_tokens=20)
+    if expected_error:
+        assert res.reading is None
+        assert expected_error in res.error
+    else:
+        assert res.error is None
+        assert res.reading.verdict == "good"
+
+
+def test_local_inference_reuses_offline_weights_and_preserves_image_colors(monkeypatch, tmp_path):
+    import sys
+    from types import SimpleNamespace
+    from gridiron_tracking.registration import local
+
+    monkeypatch.setattr(local, "load_env", lambda: [])
+
+    downloads, loads, images = [], [], []
+
+    def snapshot(model, **kwargs):
+        downloads.append(kwargs)
+        return str(tmp_path)
+
+    def load(path, **kwargs):
+        loads.append(path)
+        return object(), object()
+
+    def generate(model, processor, prompt, *, image, **kwargs):
+        images.append(image[0].getpixel((0, 0)))
+        return SimpleNamespace(text='{"verdict":"good","problem":""}', generation_tokens=12)
+
+    monkeypatch.setitem(sys.modules, "huggingface_hub", SimpleNamespace(snapshot_download=snapshot))
+    monkeypatch.setitem(sys.modules, "mlx_vlm", SimpleNamespace(load=load, generate=generate))
+    monkeypatch.setitem(sys.modules, "mlx_vlm.utils",
+                        SimpleNamespace(load_config=lambda path: {"model_type": "qwen3_vl"}))
+    monkeypatch.setitem(sys.modules, "mlx_vlm.prompt_utils",
+                        SimpleNamespace(apply_chat_template=lambda *a, **kw: "formatted prompt"))
+    core = SimpleNamespace(set_cache_limit=lambda size: None)
+    monkeypatch.setitem(sys.modules, "mlx", SimpleNamespace(core=core))
+    monkeypatch.setitem(sys.modules, "mlx.core", core)
+    monkeypatch.setattr(local, "_json_processor", lambda *a: object())
+    local._load.cache_clear()
+    try:
+        blue_bgr = np.array([[[255, 0, 0]]], dtype=np.uint8)
+        for _ in range(2):
+            local.generate_json(blue_bgr, "system", "prompt", {}, model="test/model")
+        assert len(loads) == len(downloads) == 1
+        assert downloads[0]["local_files_only"] is True
+        # Cache lookup must use the same selection as download: HF otherwise
+        # rejects the snapshot because deliberately omitted README files are absent.
+        assert downloads[0]["allow_patterns"] == local.MODEL_FILES
+        assert images == [(0, 0, 255), (0, 0, 255)]
+    finally:
+        local._load.cache_clear()
+
+
+@pytest.mark.parametrize("has_weights", [False, True])
+def test_reusing_a_model_cache_requires_weights_not_just_metadata(monkeypatch, tmp_path, has_weights):
+    from gridiron_tracking.registration import local
+
+    model_dir = tmp_path / "Example-4bit"
+    model_dir.mkdir()
+    (model_dir / "config.json").write_text("{}")
+    if has_weights:
+        (model_dir / "model.safetensors").touch()
+    monkeypatch.setenv("FOOTBALL_LOCAL_MODELS_DIR", str(tmp_path))
+    assert local.existing_model_path("mlx-community/Example-4bit") == (
+        model_dir if has_weights else None)
 
 
 # --------------------------------------------------------- halves around the 50

@@ -67,6 +67,8 @@ class BallSample:
 @dataclass
 class BallTrack:
     samples: list[BallSample] = dc_field(default_factory=list)
+    image_observations: dict[int, dict] = dc_field(default_factory=dict)
+    method: str | None = None
 
     def counts(self) -> dict[str, int]:
         out: dict[str, int] = {}

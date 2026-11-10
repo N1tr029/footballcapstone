@@ -230,6 +230,44 @@ def test_unknown_resources_return_404(client):
         assert client.get(url).status_code == 404
 
 
+def test_bdb_example_is_available_without_local_runs_or_models(client):
+    discovery = client.get("/video").json()
+    assert discovery["schema"] == "nfl-big-data-bowl-2025"
+    listing = client.get(discovery["examples"]).json()["examples"]
+    assert listing and listing[0]["name"] == "nfl_sf_sea"
+    response = client.get(listing[0]["tracking"])
+    assert response.status_code == 200
+    rows = response.json()
+    assert isinstance(rows, list) and rows[0]["club"] in ("SF", "SEA")
+    assert set(rows[0]) == {"gameId", "playId", "nflId", "displayName", "frameId", "frameType",
+                          "time", "jerseyNumber", "club", "playDirection", "x", "y", "s", "a", "dis", "o", "dir", "event"}
+    assert len([r for r in rows if r["club"] == "football"]) == 2
+    csv_response = client.get(listing[0]["csv"])
+    assert csv_response.status_code == 200 and csv_response.headers["content-type"].startswith("text/csv")
+    metadata = client.get("/video/examples/nfl_sf_sea/tracking/metadata").json()
+    assert metadata["syntheticGameId"] and metadata["syntheticPlayId"]
+    assert not metadata["coordinatesMeasured"]
+    assert not video.RUNS.exists(), "the example must not require analysis artifacts"
+
+
+def test_bdb_metadata_can_be_supplied_at_clip_creation(client, source_video):
+    uploaded = client.post("/video/uploads", files={"file": ("play.mp4", source_video.read_bytes())}).json()
+    response = client.post("/video/clips", json={"videoId": uploaded["videoId"], "name": "labeled",
+        "startFrame": 0, "stopFrame": 12, "gameId": 2022091200, "playId": 64,
+        "playDirection": "right", "teamAClub": "DEN", "teamBClub": "SEA"})
+    assert response.status_code == 200
+    spec = ClipSpec.load("labeled", video.SPEC_DIR)
+    assert spec.bdb["gameId"] == 2022091200
+    assert spec.bdb["teamClubs"] == {"teamA": "DEN", "teamB": "SEA"}
+
+
+def test_bdb_row_schema_is_discoverable_in_openapi(client):
+    schema = client.get("/openapi.json").json()
+    row = schema["components"]["schemas"]["BDBTrackingRow"]
+    assert "frameType" in row["properties"] and "nflId" in row["properties"]
+    assert "/video/clips/{name}/tracking.csv" in schema["paths"]
+
+
 @pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg optional outside the video server")
 def test_real_browser_transcode_is_readable(source_video, tmp_path):
     import cv2

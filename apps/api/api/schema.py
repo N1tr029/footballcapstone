@@ -8,7 +8,7 @@ so the exporter can add fields without breaking the API.
 Conventions (from Hindsight): 1 unit = 1 yard, offense always moves toward +x,
 angles in degrees with 0 = +y, clockwise (90 = +x).
 """
-from typing import List, Optional
+from typing import List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict
 
@@ -114,3 +114,31 @@ class PlayDetail(_Loose):
     snapFrameId: int
     players: List[PlayerInfo]
     frames: List[Frame]
+
+
+class BDBTrackingRow(BaseModel):
+    """Exact Big Data Bowl 2025 tracking_week CSV fields, also served as JSON rows.
+
+    Video exports keep unknown fields null. Generated player/game/play identifiers
+    and observation provenance are described by the companion metadata endpoint.
+    """
+    model_config = ConfigDict(allow_inf_nan=False)
+
+    gameId: int
+    playId: int
+    nflId: Optional[int]
+    displayName: str
+    frameId: int
+    frameType: Literal["BEFORE_SNAP", "SNAP", "AFTER_SNAP"]
+    time: Optional[str]
+    jerseyNumber: Optional[int]
+    club: str
+    playDirection: Optional[Literal["left", "right"]]
+    x: float
+    y: float
+    s: Optional[float]
+    a: Optional[float]
+    dis: Optional[float]
+    o: Optional[float]
+    dir: Optional[float]
+    event: Optional[str]

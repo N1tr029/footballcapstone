@@ -15,6 +15,7 @@ import threading
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal, Optional
 
@@ -23,12 +24,14 @@ from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field, model_validator
 
 from .store import REPO_ROOT
+from .schema import BDBTrackingRow
 
 router = APIRouter(prefix="/video", tags=["video"])
 
 UPLOADS = REPO_ROOT / "data" / "uploads"
 SPEC_DIR = REPO_ROOT / "data" / "clips" / "specs"
 RUNS = REPO_ROOT / "data" / "runs"
+EXAMPLES = REPO_ROOT / "docs" / "examples"
 
 # Rendering retains a decoded clip and a local vision model in memory. Serialize
 # analysis jobs on the development machine; HTTP polling stays responsive.
@@ -95,6 +98,12 @@ class ClipRequest(BaseModel):
     snapFrame: Optional[int] = Field(default=None, ge=0)
     title: str = ""
     level: Literal["nfl", "college", "high_school"] = "college"
+    gameId: Optional[int] = Field(default=None, gt=0)
+    playId: Optional[int] = Field(default=None, gt=0)
+    playDirection: Optional[Literal["left", "right"]] = None
+    teamAClub: Optional[str] = Field(default=None, pattern=r"^[A-Z]{2,3}$")
+    teamBClub: Optional[str] = Field(default=None, pattern=r"^[A-Z]{2,3}$")
+    startTime: Optional[datetime] = Field(default=None, description="Known timestamp of first exported frame")
 
     @model_validator(mode="after")
     def valid_window(self):
@@ -102,6 +111,8 @@ class ClipRequest(BaseModel):
             raise ValueError("stopFrame must be greater than startFrame")
         if self.snapFrame is not None and not self.startFrame <= self.snapFrame < self.stopFrame:
             raise ValueError("snapFrame must be inside the clip window")
+        if self.teamAClub is not None and self.teamAClub == self.teamBClub:
+            raise ValueError("the two teams must have different club labels")
         return self
 
 
@@ -145,6 +156,51 @@ def _reference_frame(spec) -> int:
 
 def _finite(value):
     return round(float(value), 3) if math.isfinite(value) else None
+
+
+@router.get("", summary="Video API discovery and Big Data Bowl output links")
+def discover():
+    return {"schema": "nfl-big-data-bowl-2025", "docs": "/docs", "examples": "/video/examples",
+            "uploads": "/video/uploads", "clips": "/video/clips",
+            "trackingJson": "/video/clips/{name}/tracking",
+            "trackingCsv": "/video/clips/{name}/tracking.csv"}
+
+
+@router.get("/examples", summary="Checked tracking examples available without running models")
+def examples():
+    return {"examples": [{"name": p.name.removesuffix(".track.json"),
+                          "tracking": f"/video/examples/{p.name.removesuffix('.track.json')}/tracking",
+                          "csv": f"/video/examples/{p.name.removesuffix('.track.json')}/tracking.csv"}
+                         for p in sorted(EXAMPLES.glob("*.track.json"))]}
+
+
+def _example_data(name):
+    _name(name)
+    path = EXAMPLES / f"{name}.track.json"
+    if not path.is_file():
+        raise HTTPException(404, f"no example {name}")
+    _tracking()
+    from gridiron_tracking import bdb
+    from gridiron_tracking.contract import PlayTrack
+    return bdb.convert(PlayTrack.from_json(json.loads(path.read_text())))
+
+
+@router.get("/examples/{name}/tracking", response_model=list[BDBTrackingRow],
+            summary="Example Big Data Bowl 2025 tracking JSON rows")
+def example_tracking(name: str):
+    return _example_data(name)[0]
+
+
+@router.get("/examples/{name}/tracking.csv", summary="Example Big Data Bowl 2025 tracking CSV")
+def example_csv(name: str):
+    _tracking()
+    from gridiron_tracking import bdb
+    return Response(bdb.to_csv(_example_data(name)[0]), media_type="text/csv")
+
+
+@router.get("/examples/{name}/tracking/metadata", summary="Example observation and identifier provenance")
+def example_metadata(name: str):
+    return _example_data(name)[1]
 
 
 # ------------------------------------------------------------------ uploads
@@ -252,6 +308,13 @@ def make_clip(req: ClipRequest) -> dict:
     spec.track.ball = False
     spec.track.ball_motion = True
     spec.track.carrier = False
+    spec.bdb = {key: value for key, value in {
+        "gameId": req.gameId, "playId": req.playId, "playDirection": req.playDirection,
+        "startTime": req.startTime.isoformat() if req.startTime else None,
+    }.items() if value is not None}
+    clubs = {key: value for key, value in {"teamA": req.teamAClub, "teamB": req.teamBClub}.items() if value}
+    if clubs:
+        spec.bdb["teamClubs"] = clubs
     written = spec.save(SPEC_DIR)
     return {"clip": req.name, "spec": str(written.relative_to(REPO_ROOT)),
             "registered": False,
@@ -418,6 +481,9 @@ def run(name: str) -> dict:
         problems = list(res.problems)
         if res.track is not None:
             assets["track"] = f"/video/clips/{name}/track"
+            assets["tracking"] = f"/video/clips/{name}/tracking"
+            assets["trackingCsv"] = f"/video/clips/{name}/tracking.csv"
+            assets["trackingMetadata"] = f"/video/clips/{name}/tracking/metadata"
             for source, dest in (("sidebyside.mp4", "reconstruction.mp4"),
                                  ("ball-preview.mp4", "ball-tracking.mp4")):
                 path = RUNS / name / source
@@ -456,6 +522,35 @@ def track(name: str):
         raise HTTPException(404, f"no track for {name} — run it first, and if the "
                                  f"run refused, read its problems")
     return json.loads(path.read_text())
+
+
+def _tracking_rows(name):
+    raw = track(name)
+    _tracking()
+    from gridiron_tracking import bdb
+    from gridiron_tracking.contract import PlayTrack
+    options = _load_clip(name).bdb if (SPEC_DIR / f"{name}.json").is_file() else {}
+    return bdb.convert(PlayTrack.from_json(raw), options)
+
+
+@router.get("/clips/{name}/tracking", response_model=list[BDBTrackingRow],
+            summary="Big Data Bowl 2025 tracking JSON rows")
+def tracking_rows(name: str):
+    return _tracking_rows(name)[0]
+
+
+@router.get("/clips/{name}/tracking.csv", summary="Big Data Bowl 2025 tracking CSV, exact 18-column header")
+def tracking_csv(name: str):
+    _tracking()
+    from gridiron_tracking import bdb
+    rows, _ = _tracking_rows(name)
+    return Response(bdb.to_csv(rows), media_type="text/csv",
+                    headers={"Content-Disposition": f'attachment; filename="{name}.tracking.csv"'})
+
+
+@router.get("/clips/{name}/tracking/metadata", summary="Tracking field provenance and synthetic identifier map")
+def tracking_metadata(name: str):
+    return _tracking_rows(name)[1]
 
 
 @router.get("/clips/{name}/report", summary="How much of the clip to believe")

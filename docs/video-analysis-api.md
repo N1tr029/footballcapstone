@@ -1,8 +1,14 @@
 # Video analysis API for the frontend
 
-The FastAPI app exposes the footage pipeline under `/video`. Start with an upload,
-choose a play window, calibrate the field, then run analysis and poll its job.
+The FastAPI app exposes the footage pipeline under `/video`. Its public tracking
+output matches the **Big Data Bowl 2025 `tracking_week_*.csv` columns**, as requested
+for [this archive](https://www.kaggle.com/datasets/alexandermeau/nfl-big-data-bowl-archived-data-2025).
+Start with an upload, choose a play window, calibrate the field, then run analysis and poll its job.
 OpenAPI is available at `http://localhost:8000/docs`.
+
+This code is on the `carrier-ball` branch. Fetching `main` alone will not include
+the video API until that branch is merged. A Git push publishes the backend code;
+it does not provision a hosted server. Start the service below on the backend host.
 
 ## Start the backend
 
@@ -35,9 +41,20 @@ through `FOOTBALL_LOCAL_MODELS_DIR` in `.env`; see
 calibration works without the local reader. Model weights, uploads, cached
 detections and generated videos are local artifacts and are not included in Git.
 
-For UI development without models or video processing, use the actual checked
-output in [`examples/nfl_sf_sea.track.json`](examples/nfl_sf_sea.track.json).
-It is the same shape returned by `GET /video/clips/{name}/track`.
+For UI development without models or video processing, start the server and use:
+
+```bash
+curl http://localhost:8000/video
+curl http://localhost:8000/video/examples/nfl_sf_sea/tracking.csv
+curl http://localhost:8000/video/examples/nfl_sf_sea/tracking
+curl http://localhost:8000/video/examples/nfl_sf_sea/tracking/metadata
+```
+
+The committed [CSV](examples/nfl_sf_sea.tracking.csv) and
+[JSON rows](examples/nfl_sf_sea.tracking.json) contain the checked video output.
+These example endpoints work on a fresh checkout, with no uploaded film or model
+download. [`nfl_sf_sea.track.json`](examples/nfl_sf_sea.track.json) is the internal
+debugging representation; it is not the Big Data Bowl interface.
 
 ## Request sequence
 
@@ -56,7 +73,10 @@ All paths below are relative to the backend origin, usually
 | Auto-calibrate | `POST /video/clips/{name}/register` | `registered`, `frame`, verdict and paint score; may take minutes while the local model reads the frame |
 | Click calibration | `POST /video/clips/{name}/pin` | `registered`, `paintAlignment`, acceptance `bar` and `next` |
 | Analyze | `POST /video/clips/{name}/run` | `{jobId, clip}`; poll for `hasTrack`, quality metadata and artifact URLs |
-| Tracking | `GET /video/clips/{name}/track` | Full `PlayTrack` JSON |
+| Tracking rows | `GET /video/clips/{name}/tracking` | Array of Big Data Bowl 2025 tracking records |
+| Tracking CSV | `GET /video/clips/{name}/tracking.csv` | The exact 18-column Big Data Bowl tracking header |
+| Export provenance | `GET /video/clips/{name}/tracking/metadata` | Synthetic identity map, missing metadata and observation sources |
+| Internal debug track | `GET /video/clips/{name}/track` | Internal `PlayTrack` JSON, retained for diagnostics |
 | Report | `GET /video/clips/{name}/report` | Plain-text geometry/tracking checks |
 | Replay | `GET /video/clips/{name}/reconstruction.mp4` | H.264 source overlay and top-down reconstruction |
 | Ball preview | `GET /video/clips/{name}/ball-tracking.mp4` | H.264 slow-motion crop, when visible ball flight was found |
@@ -74,13 +94,21 @@ existing name returns 409 and preserves its calibration.
   "stopFrame": 420,
   "snapFrame": 210,
   "title": "Practice play 1",
-  "level": "nfl"
+  "level": "nfl",
+  "playDirection": "left",
+  "teamAClub": "SF",
+  "teamBClub": "SEA"
 }
 ```
 
 `level` accepts `nfl`, `college` or `high_school`. `snapFrame` is optional; when
 omitted the clip start is used as time zero. Select a single short play: rendering
 decodes its frames into memory. Shot scanning streams the full upload.
+`gameId`, `playId` and `startTime` are optional verified metadata; `startTime`
+timestamps the first exported frame. If identifiers are not supplied, local
+synthetic game/play IDs are generated and declared in the metadata endpoint.
+Unknown names, jersey numbers and wall-clock time remain unknown. Club inputs map
+the lighter (`teamA`) and darker (`teamB`) kit groups to the supplied abbreviations.
 
 When auto-calibration returns `registered: false`, show its `problems` and the
 calibration image. Submit at least four well-spread field correspondences to
@@ -114,6 +142,9 @@ sets the job to `failed`. Only show video links present in `result.assets`:
   "clip": "practice_001",
   "hasTrack": true,
   "assets": {
+    "tracking": "/video/clips/practice_001/tracking",
+    "trackingCsv": "/video/clips/practice_001/tracking.csv",
+    "trackingMetadata": "/video/clips/practice_001/tracking/metadata",
     "track": "/video/clips/practice_001/track",
     "reconstruction": "/video/clips/practice_001/reconstruction.mp4",
     "ballPreview": "/video/clips/practice_001/ball-tracking.mp4"
@@ -126,10 +157,37 @@ The actual result also contains `problems`, `stages`, `seconds`, `teams` and
 previews. Join artifact paths to the backend origin. Replay endpoints support
 byte-range requests for seeking.
 
-## Drawing the tracking output
+## Big Data Bowl tracking format
+
+Both public endpoints return one row per player/frame, plus a football row when
+a ball position exists. CSV has exactly this ordered header; JSON has the same keys:
+
+```csv
+gameId,playId,nflId,displayName,frameId,frameType,time,jerseyNumber,club,playDirection,x,y,s,a,dis,o,dir,event
+```
+
+`frameId` is one-based and contiguous at 10 Hz. `frameType` is `BEFORE_SNAP`,
+`SNAP` or `AFTER_SNAP`. The ball has `displayName=football`, `club=football` and an
+empty/null `nflId`. Missing balls produce no football row. `o` and `dir` use the
+NFL compass convention: **0 along +y, 90 along +x**, clockwise. `dis` is actual
+distance between consecutive observed positions, not `s/10`; it is null after a
+gap. The timestamp is null unless a real start time is supplied. Null CSV fields
+are empty cells. All extra quality and provenance information lives outside the
+18 columns in the metadata response.
+
+Coordinates are yards in the calibrated field orientation; `playDirection`
+records the offense's actual direction. For NGS imports that were normalized by
+our reader, the exporter restores the original field orientation. The example
+video attacks left and has SF/SEA club labels. Its game/play IDs and tracked player
+IDs are explicitly synthetic; this does not identify the actual NFL athletes.
+This interface reproduces the tracking-file schema, not the full archive's game,
+play, player biography and annotation tables.
+
+## Internal debugging format
 
 `roster` maps identity IDs to entries containing `team`. `frames` contains time
 `t` in seconds from the snap, a sparse `players` map, optional `ball` and events.
+The internal angles use 0 along +x and differ from the public NFL rows above.
 Tracking is sampled at 10 Hz. For display, interpolate positions only between
 adjacent frames containing the same identity. Iterate the identities present in
 each frame; do not assume the entire roster is visible at every instant.
@@ -181,3 +239,6 @@ The expensive model/render boundary is stubbed in endpoint tests; the browser
 encoder is tested against a real short video when FFmpeg is installed. Tracking
 tests exercise team capacity, partial views, jersey conflicts, camera motion and
 ball evidence.
+Big Data Bowl export tests check the real release header, angle conversion,
+frame numbering, timestamps, true displacement, missing samples, football IDs
+and ingestion by the existing NGS reader.

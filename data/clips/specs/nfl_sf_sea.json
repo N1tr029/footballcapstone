@@ -82,5 +82,15 @@
     "max_team_players": 11,
     "full_roster_frame": 1578,
     "ball_motion": true
+  },
+  "bdb": {
+    "gameId": 999000001,
+    "playId": 900000,
+    "playDirection": "left",
+    "teamClubs": {
+      "teamA": "SF",
+      "teamB": "SEA",
+      "unknown": "UNK"
+    }
   }
 }

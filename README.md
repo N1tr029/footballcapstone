@@ -29,14 +29,21 @@ and sim racing: same pipeline shape, different sport.
 ## Status
 
 Four streams of five are in one tree and the data flows between them. `python -m
-pytest` at the root is **150 tests**, green.
+pytest` at the root runs the tracking, model and API regression suites.
+
+**Video analysis API:** start it from the repository root with
+`uvicorn api.main:app --app-dir apps/api`. Open `/docs` for OpenAPI or `/video` for
+endpoint discovery. Public exports use the **Big Data Bowl 2025 tracking columns**;
+`/video/examples/nfl_sf_sea/tracking.csv` and `/video/examples/nfl_sf_sea/tracking`
+serve a checked example without running models. See the
+[API setup and frontend guide](docs/video-analysis-api.md).
 
 | stream | state |
 |---|---|
 | 1 — replay & visualization | [`packages/replay-engine/hindsight`](packages/replay-engine/hindsight) — Unity 6.6 app: field, 22 players, playback, play navigator, 115 real plays. Plus the original three.js [`prototype`](packages/replay-engine/prototype) |
-| 2 — footage → tracking | [`packages/tracking`](packages/tracking) — layer 2 built and validated against real tracking; layer 1's back half built and measured in yards. A real detector on real pixels is next |
+| 2 — footage → tracking | [`packages/tracking`](packages/tracking) — video estimates with camera calibration, jersey teams, visible-ball flight and Big Data Bowl exports. Continuous identity and occlusion handling remain incomplete |
 | 3 — play model | [`packages/counterfactual`](packages/counterfactual) — outcome forecast and typed decision review, bridged to the contract in all three directions |
-| 4 — data platform | `packages/shared`, `apps/api` — **not started.** `PlayState` is unwritten, and the contracts live in the packages that produce them until it is |
+| 4 — data platform | [`apps/api`](apps/api) serves plays, model reviews and video-analysis jobs with Big Data Bowl tracking exports. `PlayState` and shared platform contracts remain incomplete |
 | 5 — app & product | [`apps/desktop`](apps/desktop) — **not started**, and possibly unnecessary: the Unity app may simply be the app |
 
 The join is data flow, not co-location. On a real play out of the Unity app:

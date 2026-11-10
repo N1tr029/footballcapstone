@@ -6,6 +6,13 @@ coordinates out, plus an honest account of how much of it to believe.
 Output is the shared `PlayTrack` that `packages/replay-engine` already draws, so
 anything this produces animates without translation.
 
+For consumers expecting NFL Big Data Bowl 2025, each render also writes
+`tracking.csv` (the exact 18-column tracking header), `tracking.json` (the same
+rows as JSON), and `tracking-metadata.json` (identity and observation provenance).
+`gridiron_tracking.bdb.write_play` converts an existing `PlayTrack` without
+rerunning vision. The HTTP endpoints and checked examples are documented in
+[the frontend guide](../../docs/video-analysis-api.md).
+
 ## Two layers, and only one of them needs video
 
 **Layer 1 — coordinates.** Video in, x/y/s/a/dir/o per player per frame. Hard,

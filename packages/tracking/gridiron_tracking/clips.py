@@ -262,6 +262,8 @@ class ClipSpec:
 
     title: str = ""
     notes: str = ""
+    bdb: dict[str, Any] = dc_field(default_factory=dict)
+    """Optional Big Data Bowl export metadata: IDs, club labels, direction and startTime."""
     detect: DetectSpec = dc_field(default_factory=DetectSpec)
     register: RegisterSpec = dc_field(default_factory=RegisterSpec)
     track: TrackSpec = dc_field(default_factory=TrackSpec)

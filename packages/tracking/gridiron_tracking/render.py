@@ -949,6 +949,8 @@ def render(spec: ClipSpec, root: Path = RUN_DIR, force=(), log=print) -> RenderR
             log(f"    dropped {n} tracks that never moved off a sideline")
     res.track = out.track
     out.track.meta.setdefault("play_id", spec.name)
+    if spec.bdb:
+        out.track.meta["bdb"] = dict(spec.bdb)
     out.track.meta["clip"] = {
         "name": spec.name, "video": spec.video, "start_frame": spec.start,
         "stop_frame": spec.stop, "snap_source_frame": spec.snap_frame,
@@ -1036,6 +1038,8 @@ def render(spec: ClipSpec, root: Path = RUN_DIR, force=(), log=print) -> RenderR
     if paint_audit:
         out.track.meta["registration"]["paint_alignment_samples"] = paint_audit
     (out_dir / "track.json").write_text(json.dumps(out.track.to_json()))
+    from . import bdb
+    bdb.write_play(out_dir, out.track)
     report_txt = res.report.table()
     if res.markers is not None and res.markers.samples:
         report_txt += "\n\n" + res.markers.table()

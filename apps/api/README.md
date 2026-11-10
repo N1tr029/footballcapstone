@@ -9,6 +9,10 @@ already write and adds no data of its own:
 - **Model reviews**: `packages/counterfactual/reports/decisions.jsonl`, converted
   to the roles.md `Recommendation` shape by
   `gridiron_counterfactual.recommendation.from_report`.
+- **Video analysis**: `/video` uploads, candidate plays, field calibration,
+  analysis jobs, tracking JSON and browser-playable replay/ball previews.
+  The [frontend integration guide](../../docs/video-analysis-api.md) includes the
+  request sequence, JSON shape, setup and a checked example for developing the UI.
 
 ## Run
 

@@ -102,6 +102,14 @@ def review_play(
     """
     notes: list[str] = []
 
+    readiness = track.meta.get("prepare_report")
+    if track.meta.get("source") == "vision" and (not readiness or not readiness.get("reviewable")):
+        raise ValueError("video is not ready for analysis: " + "; ".join((readiness or {}).get("blockers", ["prepare and validate the track first"])))
+    if track.meta.get("tracking_quality"):
+        notes.extend(track.meta["tracking_quality"].get("notes", []))
+    if track.meta.get("reviewed_pass"):
+        notes.append("Assisted pass: throw/catch reviewed from film; carrier/flight positions are estimates.")
+
     roles.apply(track)
     assigned = track.meta["roles"]
     target = next((pid for pid, r in assigned.items() if r == roles.TARGET), None)
@@ -170,11 +178,17 @@ def review_play(
         return Review(track, simulated, None, None, notes)
 
     report = reports[0]
+    recommendation = from_report(report)
+    if track.meta.get("source") == "vision":
+        recommendation.confidence = "low"
+        recommendation.assumptions.extend(track.meta.get("tracking_quality",{}).get("notes",[]))
+        recommendation.evidence["tracking_source"] = "estimated_from_video"
+        recommendation.evidence["assisted_pass"] = bool(track.meta.get("reviewed_pass"))
     notes.append(
         "decision and thresholds are decision_engine's own; this module only "
         "supplied the roles and the play state it needed"
     )
-    return Review(track, simulated, from_report(report), report, notes)
+    return Review(track, simulated, recommendation, report, notes)
 
 
 def _decide(track: PlayTrack, predictions: pd.DataFrame,
@@ -194,7 +208,9 @@ def _decide(track: PlayTrack, predictions: pd.DataFrame,
     rows = predictions.copy()
     rows["game_id"] = game_id
     rows["play_id"] = play_id
-    rows["nfl_id"] = rows["player_id"].map(lambda p: _as_int(p, 0))
+    from gridiron_tracking.hindsight import nfl_ids
+    ids = nfl_ids(track)
+    rows["nfl_id"] = rows["player_id"].map(ids)
     rows["frame_id"] = rows["horizon"]
     rows["player_role"] = rows["player_id"].map(assigned)
     rows = rows.dropna(subset=["player_role"])

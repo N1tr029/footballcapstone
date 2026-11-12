@@ -1,0 +1,111 @@
+{
+  "clip": "nfl_sf_sea",
+  "frame": 1575,
+  "level": "nfl",
+  "method": "assisted calibration from inspected paint; yard labels confirmed with upright local-Qwen crops",
+  "points": [
+    {
+      "field": [
+        65,
+        53.3
+      ],
+      "pixel": [
+        203.33583147526028,
+        90.85892645359954
+      ],
+      "source": "yard-line intersection with inner far sideline"
+    },
+    {
+      "field": [
+        70,
+        53.3
+      ],
+      "pixel": [
+        530.0621701564245,
+        84.57572735752609
+      ],
+      "source": "yard-line intersection with inner far sideline"
+    },
+    {
+      "field": [
+        80,
+        53.3
+      ],
+      "pixel": [
+        1182.8715365860119,
+        72.02170015307678
+      ],
+      "source": "yard-line intersection with inner far sideline"
+    },
+    {
+      "field": [
+        85,
+        53.3
+      ],
+      "pixel": [
+        1514.9033100197735,
+        65.63647469348955
+      ],
+      "source": "yard-line intersection with inner far sideline"
+    },
+    {
+      "field": [
+        70,
+        40.3
+      ],
+      "pixel": [
+        618.3264770507812,
+        271
+      ],
+      "source": "painted numeral centre at the yard line"
+    },
+    {
+      "field": [
+        80,
+        40.3
+      ],
+      "pixel": [
+        1352.8814697265625,
+        257
+      ],
+      "source": "painted numeral centre at the yard line"
+    },
+    {
+      "field": [
+        70,
+        13.0
+      ],
+      "pixel": [
+        900.5082397460938,
+        867
+      ],
+      "source": "painted numeral centre at the yard line"
+    },
+    {
+      "field": [
+        80,
+        13.0
+      ],
+      "pixel": [
+        1895.138916015625,
+        847
+      ],
+      "source": "painted numeral centre at the yard line"
+    }
+  ],
+  "checks": {
+    "paint_alignment": 7.841772151898734,
+    "minimum_paint_alignment": 1.6,
+    "turf_overlap": 0.9137931034482759
+  },
+  "notes": [
+    "The inferred 35-yard-line point was excluded because the virtual blue line obscures its exact paint.",
+    "Coordinates are measured in the original 1920x1080 frame.",
+    "Snap frame 1672 was estimated by inspecting consecutive source frames 1670-1679."
+  ],
+  "crop_readings": {
+    "far_row_upright": "30 40",
+    "near_row": "30",
+    "far_row_original_orientation": "20 30 (incorrect; rejected)"
+  }
+}

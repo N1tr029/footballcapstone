@@ -6,6 +6,13 @@ coordinates out, plus an honest account of how much of it to believe.
 Output is the shared `PlayTrack` that `packages/replay-engine` already draws, so
 anything this produces animates without translation.
 
+For consumers expecting NFL Big Data Bowl 2025, each render also writes
+`tracking.csv` (the exact 18-column tracking header), `tracking.json` (the same
+rows as JSON), and `tracking-metadata.json` (identity and observation provenance).
+`gridiron_tracking.bdb.write_play` converts an existing `PlayTrack` without
+rerunning vision. The HTTP endpoints and checked examples are documented in
+[the frontend guide](../../docs/video-analysis-api.md).
+
 ## Two layers, and only one of them needs video
 
 **Layer 1 — coordinates.** Video in, x/y/s/a/dir/o per player per frame. Hard,
@@ -25,7 +32,9 @@ kind of project runs out of semester.
 Layer 2 is built and validated against real tracking. Layer 1's back half is built
 and measured: registration, field-space tracking, resampling, kinematics, orientation,
 export, and the benchmark that scores it in yards. Layer 1's front half — a real
-detector on real pixels — is next, and nothing here has yet seen a photograph.
+detector on real pixels — has started: players come off a general-purpose detector,
+and the ball has a fine-tune of its own, measured and still too weak to use. See
+**The ball** below for exactly how weak and why.
 
 Everything here runs on `numpy scipy pandas pyarrow` alone. OpenCV and ultralytics
 are optional extras, needed only once real video is involved.
@@ -56,6 +65,22 @@ export.write_play("out/", track, interactions.derive(track, offense="home"))
 block. **Read `provenance` before trusting any of it.**
 
 Any public NGS release works as the `--csv`; column spellings are resolved by alias.
+
+**Where to get one, without an account.** The release every number below is measured
+on is published openly by the NFL — no Kaggle sign-in, no competition entry:
+
+```bash
+mkdir -p data/bdb2017 && cd data/bdb2017
+for f in tracking_gameId_2017090700.csv plays.csv games.csv players.csv; do
+  curl -LO "https://raw.githubusercontent.com/nfl-football-ops/Big-Data-Bowl/master/Data/$f"
+done
+```
+
+30 MB, 177 plays, and it carries the three things the newer competition files do
+not: an `event` column, a `dis` column, and real per-frame football rows. The
+2026 competition release loads fine through the same aliases but cannot drive the
+benchmark — it has `ball_land_x`/`ball_land_y`, where the ball came down, and no
+record of where it was on the way.
 
 ## How accuracy is measured
 
@@ -114,13 +139,92 @@ derived from a guess.
 `provenance.coordinates`, and it says it differently depending on whether the
 coordinates came from a tracking system or from a homography.
 
+## Local vision reader (Apple Silicon)
+
+Automatic field registration defaults to the downloadable
+`mlx-community/Qwen3.5-9B-4bit` model, running through MLX on the Mac.
+It needs no Alibaba, Gemini, or Anthropic API key. Install the runtime and download
+the approximately 6 GB model once, from the repository root. Setup requires
+another 3 GiB of free space for runtime work and swap:
+
+```bash
+.venv/bin/python -m pip install -e './packages/tracking[local-vision]'
+.venv/bin/python scripts/setup_local_vision.py
+.venv/bin/python -m gridiron_tracking render nfl_sf_sea --force register
+```
+
+Weights live in the ignored `data/models/hub` directory. After setup, inference
+loads cached files only and works offline. The model stays loaded across frames;
+concurrent clips share it rather than loading another copy. The local reader
+requires an Apple Silicon Mac; the rest of the tracking package remains portable.
+
+To reuse models downloaded for another project, set `FOOTBALL_LOCAL_MODELS_DIR`
+to the directory containing the model folders (for example, a folder named
+`Qwen3.5-9B-4bit`). Setup detects a populated model folder and skips the download.
+This Mac reuses its existing grader model cache through this setting in `.env`.
+
+`register.model` in a clip spec takes priority. A missing value uses
+`FOOTBALL_VISION_MODEL` (if set), otherwise the local default. For a larger local
+model, download it with `scripts/setup_local_vision.py --model <repository>` and
+set `register.model` to `mlx:<repository>`. `FOOTBALL_MODEL_CACHE` changes the cache
+directory. Hosted readers remain available by explicitly selecting their model.
+
+Local generation is constrained to the JSON schema, including two coordinates
+per landmark endpoint. The same field geometry checks and 1.60x paint alignment bar
+apply to local readings. A successful download does not establish field accuracy;
+unreadable or misaligned clips still need calibration.
+
+The 49ers–Seahawks clip now renders end to end using the checked, assisted
+calibration in `docs/calibration/nfl_sf_sea.json`. Eight inspected paint points
+at source frame 1575 pass the unchanged 1.60x paint bar at 7.84x. The saved spec
+contains that homography; rerunning it needs no hosted model or further clicks.
+Whole-frame Qwen reading remains unreliable on this shot. Rotating a crop of
+the far number row upright produces the correct 30 and 40, which confirmed the
+labels used for the assisted calibration.
+
+The window is source frames 1575–1864, including the film-estimated snap at 1672
+and the tackle. Camera motion follows turf, with players and stationary broadcast
+captions excluded. Tracking stays at 10 Hz; the 12 fps video interpolates display
+positions onto the source clock and lasts 9.67 seconds. Sampled paint checks are
+stored in `track.json` metadata; a null score means insufficient visible paint.
+
+Outputs are in `data/runs/nfl_sf_sea`: `reconstruction.mp4` is the browser-playable
+video, `track.json` is the tracking contract, `report.txt` gives the checks, and
+`export/` contains CSV and JSON with provenance. Reprojection agreement is 83.4%,
+which checks consistency with detections rather than true player identities.
+There are still fragmented identities and players lost to occlusion or camera
+framing. Team colours are blue for light jerseys (SF), yellow for dark jerseys
+(SEA), and gray for uncertain identities. Torso and pants evidence uses exclusive
+matches, initial kit centres, and a temporal median constrained to at most 11
+simultaneous athletes per team. Persistent jersey conflicts split a mixed track
+into separate identities rather than carrying the old colour onto the new person.
+This improves team colours but increases fragmentation; these are still not 22
+continuous player identities. The inspected complete formation at source frame
+1578 is 11/11, with all 22 jerseys visually checked. Cropped frames need not have
+equal counts. `track.full_roster_frame` is an explicit inspected hint, not an
+automatic claim that 22 person detections must be 22 athletes.
+
+The generic ball detector and carrier estimator are disabled for this clip.
+`track.ball_motion` detects isolated brown candidates outside player boxes and
+requires a sustained trajectory after camera compensation. On this clip it finds
+the seven visible flight frames 1772–1778, with no manual ball seed. These are
+stored at source rate under `meta.ball.image_observations`; two sightings fall on
+the contract's 10 Hz grid. The green source-video ring and trail use actual pixel
+sightings. Missing frames, including the ball hidden in a player's hands, stay
+unknown. The field position is a ground-plane projection, not recovered airborne
+height. This is a visually checked pass example, not a validated general detector.
+`ball-preview.mp4` shows the pass at 0.2x speed with enlarged source pixels;
+`ball-tracking.mp4` is its H.264 copy for browser playback.
+
+The isolated `unity/` export is experimental and reports missing player positions;
+it does not replace the Unity application's existing play library.
+
 ## Registering a clip the vision model cannot
 
 `register.mode: auto` asks the vision model and is checked against the painted
 lines; below 1.60x the drawn lines are finding no more paint than chance and the
-clip is refused. It clears that bar on some cameras and not others — a low wide
-sideline shot gives it three usable correspondences and it needs more, and three
-of the eight clips here fail on it. The fallback is a person naming points, which
+clip is refused. A frame may have too few readable or well-spread landmarks for
+automatic registration. The fallback is a person naming points, which
 is what `data/calibrate.html` is for, and these two commands are the steps either
 side of it:
 
@@ -233,10 +337,45 @@ texture. No fast coherent trajectory at all. The pan cancellation and the turf m
 both work; the signal-to-noise is the problem, and tuning it further against a clip
 with no ground truth is how the 42% figure above happened in the first place.
 
-**What would clear it.** A detector fine-tuned on footballs — a few hundred labelled
-frames across these eight clips, which is an afternoon of labelling and an hour of
-training. Nothing else in the chain is waiting on research; this is the one piece,
-and the machinery around it is built:
+**The fine-tune happened, and the first one was measured wrong.** It scored
+mAP50 0.005 and was written off. Re-measured against the holdout it was actually
+built with — `devin_td`, 25 balls — `best.pt` scores:
+
+| imgsz | mAP50 | precision | recall |
+|---|---|---|---|
+| 960 — what it was trained at | **0.107** | 0.478 | 0.120 |
+| 1536 — what it is *used* at | 0.001 | 0.003 | 0.120 |
+
+It had learned something: nearly half right when it fires, firing on an eighth of
+the balls. Too weak to use, and weak for two reasons that are not about footballs.
+
+**Scale.** It was trained on whole 1920x1080 frames at `imgsz 960`, which halves
+everything — a twelve-pixel ball arrives as six, at or under the floor of a
+stride-8 detection head. Inference does the *opposite*: it tiles the frame and
+magnifies each tile, so the ball it is asked about is two to three times larger
+than any ball it was trained on. The collapse from 0.107 to 0.001 between those two
+sizes is that mismatch measured. `to_yolo_tiled` crops at native resolution
+instead, so training sees the ball the size the source has it, and held-out clips
+are cut on the same overlapping grid inference sweeps with.
+
+Mosaic augmentation has to go off with it. Mosaic stitches four images into one and
+downscales — on tiles cropped specifically to preserve the ball's size it undoes
+the crop and hands back the six-pixel ball. With it on, classification loss sat at
+147 falling to 10 and mAP50 never left 0.005; with it off the loss starts near 1.5.
+
+**Stale labels.** 25 of the first 112 labels are exact coordinate repeats — the
+same point to the last decimal, which is a click quantised to a screen pixel, not a
+hand. A click saves the frame and advances, leaving the next frame under a cursor
+that has not moved; click again and it is labelled at the old frame's point. 20 of
+the 25 are one kickoff: a ball in flight recorded at one fixed point, so the box
+sits a ball-width behind the ball on every frame but the first. That was **30% of
+the training positives**. The UI now refuses a click within two pixels of the
+previous frame's, and `without_stale_repeats` throws away the ones already
+collected.
+
+**What is still needed.** 87 real labels is thin, and the honest next gain is more
+of them rather than more epochs. Nothing else in the chain is waiting on research;
+this is the one piece, and the machinery around it is built:
 
 ```bash
 python -m gridiron_tracking label        # samples frames, opens the labelling UI
@@ -256,12 +395,36 @@ out a clip measures the only thing worth knowing, which is whether it finds a ba
 on footage it has not seen. Frames marked `N` become empty label files — the
 negatives that stop a fine-tune learning the graphic all over again.
 
+Name the clip with `--holdout`, and name one with balls in it. The first run held
+out `ucf_kickoff`, which has **one**: a model that predicts nothing at all scores
+well on that, and the resulting number means nothing either way. `to_yolo` warns
+when the held-out clip has fewer than five.
+
 Then point a clip at the result and **measure it the same way**:
 
 ```jsonc
 "track": { "ball": true, "ball_weights": "data/labels/weights/football/weights/best.pt",
-           "ball_class": 0 }
+           "ball_class": 0, "ball_imgsz": 640, "ball_tiles": 3 }
 ```
+
+**These two numbers are not free.** `ball_tiles: 3` over a 1920-wide frame cuts
+640-wide tiles, and `ball_imgsz: 640` hands each one to the model unscaled — which
+is the tile size and the magnification `train-ball` used, so the ball arrives the
+size it was learned at.
+
+The rule is `ball_imgsz` = the `--imgsz` the weights were trained with, and
+`ball_tiles` chosen so a tile is the `--tile` they were trained with. Change one
+and you must change the other. Reading them off `args.yaml` beside the weights is
+the reliable way:
+
+```bash
+grep -E "^(imgsz|model):" data/labels/weights/football/args.yaml
+```
+
+Getting this wrong is not a small miscalibration. The same weights score mAP50
+0.107 at the size they were trained at and 0.001 two sizes up — setting these
+independently of training is exactly how the first fine-tune came to look
+worthless at the size it was being used at.
 
 Read `travelled_yards` beside `measured_fraction`. A detection rate alone has looked
 like progress twice on this task and been furniture both times.

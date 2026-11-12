@@ -150,6 +150,19 @@ class TrackSpec:
     same samples. The officials cost less as a handful of misassigned tracks than a
     halved team does."""
 
+    max_team_players: int = 11
+    """Maximum simultaneously visible players assigned to either team."""
+
+    full_roster_frame: int | None = None
+    """An inspected source frame showing all 22 athletes, excluding officials.
+
+    Only this explicit evidence permits requiring 11 per side. Cropped shots have
+    upper bounds only; seeing 22 person boxes alone does not prove a full formation.
+    """
+
+    identity_anchors: list[dict[str, Any]] = dc_field(default_factory=list)
+    """Optional reviewed playerId/frame/field points for identity reacquisition."""
+
     team_cost: float = 0.0
     """Yards of penalty for matching a detection to a track of the other team. Needs
     ``pre_teams``; without a team on the detections there is nothing to disagree with."""
@@ -184,6 +197,12 @@ class TrackSpec:
     sideline_band: float = 2.0
 
     ball: bool = True
+    ball_motion: bool = False
+    """Find isolated airborne brown objects with a camera-compensated motion track.
+
+    This supplements the learned detector on wide broadcast shots. It makes no
+    claim about a football hidden in a player's hands or behind the line.
+    """
     ball_tiles: int = 3
     """Crops per side for ball detection, as ``detect.tiles`` is for players.
 
@@ -203,6 +222,13 @@ class TrackSpec:
     cannot find a football in broadcast footage — see the package README. Point this
     at the output of ``train-ball`` once there is one."""
     ball_class: int = 32
+    carrier: bool = True
+    """Attribute the ball to whoever is holding it, when a fitted picker is there.
+
+    Independent of ``ball``: it reads player positions, not pixels, so it works on a
+    clip with no detector at all and on the frames where the detector finds nothing
+    — which is most of them. See carrier.py for what it is worth."""
+    carrier_weights: str = "data/labels/carrier.joblib"
     """Class index to keep. 32 is COCO's sports ball; a detector fine-tuned by
     ``train-ball`` has one class and it is 0."""
 
@@ -239,6 +265,10 @@ class ClipSpec:
 
     title: str = ""
     notes: str = ""
+    bdb: dict[str, Any] = dc_field(default_factory=dict)
+    """Optional Big Data Bowl export metadata: IDs, club labels, direction and startTime."""
+    reviewed_pass: dict[str, Any] = dc_field(default_factory=dict)
+    """Optional explicit film-reviewed pass/carrier annotation; never a detection."""
     detect: DetectSpec = dc_field(default_factory=DetectSpec)
     register: RegisterSpec = dc_field(default_factory=RegisterSpec)
     track: TrackSpec = dc_field(default_factory=TrackSpec)

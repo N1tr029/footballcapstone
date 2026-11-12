@@ -33,6 +33,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field as dc_field
 from typing import Any
+from copy import deepcopy
 
 from . import field as fieldmod
 from . import roster as rostermod
@@ -63,6 +64,15 @@ class PrepareReport:
     has_ball: bool = False
     ball_measured: float = 0.0
     """Fraction of ball samples that were actually detected rather than coasted."""
+    ball_attributed: float = 0.0
+    """Fraction that came from carrier attribution — the ball placed on whoever
+    possession says is holding it, rather than seen.
+
+    Tracked apart from ``ball_measured`` because the two fail differently, and the
+    difference decides what the track can be used for. An attributed ball is good
+    while somebody is carrying it and says nothing at all while it is in the air,
+    so it will draw a run correctly and cannot locate a throw. Summing the two into
+    one 'we have a ball' number loses exactly the distinction a caller needs."""
     ball_coverage: float = 0.0
     events: Any = None
     """The derived pass window, or None when one was not looked for."""
@@ -115,6 +125,7 @@ class PrepareReport:
             "line_source": self.line_source,
             "has_ball": self.has_ball,
             "ball_measured": round(self.ball_measured, 3),
+            "ball_attributed": round(self.ball_attributed, 3),
             "ball_coverage": round(self.ball_coverage, 3),
             "ball_travelled": round(self.ball_travelled, 2),
             "reviewable": self.reviewable,
@@ -135,7 +146,17 @@ def prepare(track: PlayTrack, offense: str | None = None) -> tuple[PlayTrack, Pr
     roster is clean, it is already oriented, and its meta already carries the
     situation.
     """
-    out, roster_report = rostermod.consolidate(track)
+    track = deepcopy(track)
+    if track.meta.get("identity", {}).get("anchorSourceFrame") is not None:
+        counts = {}
+        for entry in track.roster.values():
+            counts[entry.team] = counts.get(entry.team, 0) + 1
+        roster_report = rostermod.RosterReport(before=len(track.roster), after=len(track.roster),
+            per_side=counts, coverage=sum(len(f.players) for f in track.frames)/max(1,len(track.frames)*len(track.roster)),
+            notes=["Inspected formation identities retained, including temporarily unobserved athletes."])
+        out = track
+    else:
+        out, roster_report = rostermod.consolidate(track)
     report = PrepareReport(roster=roster_report)
 
     # --- is anything in this file a coordinate at all ------------------------
@@ -155,6 +176,8 @@ def prepare(track: PlayTrack, offense: str | None = None) -> tuple[PlayTrack, Pr
 
     situation = out.meta.get("broadcast") or {}
     los = situation.get("lineOfScrimmage")
+    if out.meta.get("mirrored") and out.meta.get("lineOfScrimmage") is not None:
+        los = out.meta["lineOfScrimmage"]
     attacks = situation.get("attacks") or out.meta.get("play_direction")
 
     # --- who has the ball ----------------------------------------------------
@@ -200,12 +223,13 @@ def prepare(track: PlayTrack, offense: str | None = None) -> tuple[PlayTrack, Pr
         )
 
     # --- which way is downfield ----------------------------------------------
-    if attacks == "left":
+    report.mirrored = bool(out.meta.get("mirrored"))
+    if attacks == "left" and not out.meta.get("mirrored"):
         fieldmod.mirror_track(out)
         report.mirrored = True
         if los is not None:
             los = fieldmod.LENGTH - los
-    elif attacks != "right":
+    elif attacks not in ("left", "right"):
         report.blockers.append(
             "which way the offense attacks is unknown, so the play may be mirrored. "
             "It comes free from the broadcast's own lines when the clip spec sets "
@@ -243,6 +267,9 @@ def prepare(track: PlayTrack, offense: str | None = None) -> tuple[PlayTrack, Pr
     report.has_ball = positioned > 0
     stats = out.meta.get("ball") or {}
     report.ball_measured = float(stats.get("measured_fraction") or 0.0)
+    by_source = stats.get("by_source") or {}
+    n_samples = sum(by_source.values()) or 1
+    report.ball_attributed = round(by_source.get("carrier", 0) / n_samples, 3)
     report.ball_coverage = positioned / len(out.frames) if out.frames else 0.0
     report.ball_travelled = float(stats.get("travelled_yards") or 0.0)
 
@@ -252,26 +279,45 @@ def prepare(track: PlayTrack, offense: str | None = None) -> tuple[PlayTrack, Pr
             "and no arrival. The review has nothing to key a forecast on. Set "
             "track.ball = true in the clip spec."
         )
+    elif out.meta.get("reviewed_pass"):
+        report.notes.append("Throw/catch and carriers were reviewed from film; the ball path includes attributed possession and interpolated flight, not continuous detections.")
     elif report.ball_travelled < MIN_BALL_TRAVEL:
         report.blockers.append(
             f"the ball track covers {report.ball_travelled:.1f} yards over the whole "
-            f"play, which nothing thrown or carried does. It is a track of something "
-            f"that does not move — on a televised game, the down-and-distance "
-            f"graphic sits on the field near the line of scrimmage and the generic "
-            f"sports-ball class finds it readily. A detection rate "
-            f"({report.ball_measured:.0%} here) says how often something was found "
-            f"and nothing about what."
+            f"play. This may be a partial flight or a false detection; it does not "
+            f"establish possession, throw and arrival. Review the pass window or "
+            f"provide a more complete ball track."
         )
     elif report.ball_measured < MIN_BALL_MEASURED:
-        report.blockers.append(
-            f"the ball was actually seen on {report.ball_measured:.0%} of samples "
-            f"({report.ball_coverage:.0%} of frames carry a position, the rest "
-            f"coasted). Below {MIN_BALL_MEASURED:.0%} the throw and the arrival "
-            f"cannot be located, and a review built on that would be confident and "
-            f"meaningless. A football in a wide broadcast shot is a few pixels and "
-            f"is behind somebody most of the play; the generic sports-ball class "
-            f"was not trained on one."
-        )
+        # Two different shortfalls reach this branch and they deserve different
+        # sentences. A coasted ball is a filter's guess about something nobody saw.
+        # An attributed ball is a statement that the ball is wherever the carrier
+        # is, which is right to about a yard while someone is carrying it — so the
+        # track is fine for a run and still useless for a throw. Saying only "the
+        # ball was seen on 0% of samples" sends the reader to the detector when
+        # the detector is not the thing standing in the way.
+        if report.ball_attributed >= MIN_BALL_MEASURED:
+            report.blockers.append(
+                f"the ball was never actually seen: {report.ball_attributed:.0%} of "
+                f"samples are attributed to whoever was carrying it, not detected. "
+                f"That places the ball to about a yard while it is being carried, so "
+                f"the track will draw a run correctly and can be exported — but a "
+                f"carried ball has no position while it is in the air, so the throw "
+                f"and the arrival cannot be located and a pass review keyed on this "
+                f"would be confident and meaningless. For a run this blocker is the "
+                f"only thing standing between the clip and a review; for a pass, a "
+                f"ball detector that clears {MIN_BALL_MEASURED:.0%} is needed."
+            )
+        else:
+            report.blockers.append(
+                f"the ball was actually seen on {report.ball_measured:.0%} of samples "
+                f"({report.ball_coverage:.0%} of frames carry a position, the rest "
+                f"coasted). Below {MIN_BALL_MEASURED:.0%} the throw and the arrival "
+                f"cannot be located, and a review built on that would be confident and "
+                f"meaningless. A football in a wide broadcast shot is a few pixels and "
+                f"is behind somebody most of the play; the generic sports-ball class "
+                f"was not trained on one."
+            )
 
     # --- the throw and the arrival --------------------------------------------
     # Last, because it needs the ball and a consolidated roster: the flight test is

@@ -40,7 +40,7 @@ pixels say they are — and that is the layer the eye notices first.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field as dc_field
+from dataclasses import dataclass, field as dc_field, replace
 
 import numpy as np
 from scipy.optimize import linear_sum_assignment
@@ -281,6 +281,52 @@ def _to_image(registration, frame_index: int, field_pts):
     return h.to_image(field_pts)
 
 
+def _render_frame_at(track: PlayTrack, t: float):
+    """Interpolate display positions without changing the measured 10 Hz track."""
+    from bisect import bisect_right
+
+    times = track.times
+    i = bisect_right(times, t)
+    if i == 0 or i == len(times):
+        return replace(track.frames[0 if i == 0 else -1], t=t)
+    a, b = track.frames[i - 1], track.frames[i]
+    weight = (t - a.t) / (b.t - a.t)
+    nearest = a if weight < 0.5 else b
+    players = {}
+    for pid, point in nearest.players.items():
+        if pid in a.players and pid in b.players:
+            p, q = a.players[pid], b.players[pid]
+            point = replace(point, x=p.x + weight * (q.x - p.x),
+                            y=p.y + weight * (q.y - p.y))
+        players[pid] = point
+    return replace(nearest, t=t, players=players)
+
+
+def draw_ball_sighting(image, source_frame, observations, homography=None, fps=30):
+    """Ring actual image evidence only; a missing sighting gets no source marker."""
+    import cv2
+
+    point = (observations or {}).get(source_frame)
+    if point is None:
+        return False
+    color = (90, 255, 140)
+    if homography is not None:
+        history = [p["field"] for fi, p in sorted(observations.items())
+                   if source_frame - round(.3 * fps) <= fi <= source_frame]
+        if len(history) > 1:
+            px = np.asarray(homography.to_image(history))
+            if np.isfinite(px).all():
+                cv2.polylines(image, [px.astype(np.int32)], False, color, 2, cv2.LINE_AA)
+    center = tuple(round(v) for v in point["pixel"])
+    cv2.circle(image, center, 20, (15, 30, 15), 5, cv2.LINE_AA)
+    cv2.circle(image, center, 20, color, 2, cv2.LINE_AA)
+    cv2.putText(image, "BALL SEEN", (center[0] + 27, center[1] - 24),
+                cv2.FONT_HERSHEY_SIMPLEX, .7, (10, 20, 10), 4, cv2.LINE_AA)
+    cv2.putText(image, "BALL SEEN", (center[0] + 27, center[1] - 24),
+                cv2.FONT_HERSHEY_SIMPLEX, .7, color, 2, cv2.LINE_AA)
+    return True
+
+
 def side_by_side(
     out_path,
     track: PlayTrack,
@@ -294,6 +340,7 @@ def side_by_side(
     pad: float = 6.0,
     team_colors: dict | None = None,
     ball_seen_at=None,
+    ball_observations=None,
 ):
     """The clip with the recreation drawn on it, above the top-down view.
 
@@ -313,7 +360,11 @@ def side_by_side(
         raise ImportError("this needs opencv") from e
     from pathlib import Path
 
-    COL = team_colors or {"teamA": (59, 169, 242), "teamB": (232, 168, 79)}
+    COL = team_colors or {"teamA": (242, 169, 59), "teamB": (79, 208, 242)}
+    if out_fps <= 0:
+        raise ValueError("output fps must be positive")
+    if not track.frames:
+        raise ValueError("cannot render an empty track")
     any_frame = next(iter(frames.values()))
     fh, fw = any_frame.shape[:2]
 
@@ -372,7 +423,11 @@ def side_by_side(
                         cv2.FONT_HERSHEY_SIMPLEX, 0.48, (238, 238, 238), 1, cv2.LINE_AA)
 
     try:
-        for f in track.frames:
+        first, last = min(frames), max(frames)
+        count = max(1, round((last - first + 1) * out_fps / fps))
+        for i in range(count):
+            t = (first - frame_offset) / fps + i / out_fps
+            f = _render_frame_at(track, t)
             src = int(round(f.t * fps)) + frame_offset
             if src not in frames:
                 continue
@@ -382,7 +437,7 @@ def side_by_side(
                 cv2.rectangle(left, (int(b[0]), int(b[1])), (int(b[2]), int(b[3])), (70, 70, 70), 1)
 
             h = registration.at(src) if hasattr(registration, "at") else None
-            on = off = 0
+            on = off = dupes = 0
             if h is not None and f.players:
                 ids = list(f.players)
                 px = np.atleast_2d(h.to_image([[f.players[i].x, f.players[i].y] for i in ids]))
@@ -419,26 +474,43 @@ def side_by_side(
                                     (0, 0, 255), 2, cv2.LINE_AA)
                         cv2.line(left, (ctr[0] - rx, ctr[1] - rx), (ctr[0] + rx, ctr[1] + rx),
                                  (0, 0, 255), 2, cv2.LINE_AA)
+            ball_visible = draw_ball_sighting(left, src, ball_observations, h, fps)
+            counts = {team: sum(track.roster[pid].team == team for pid in f.players
+                                if pid in track.roster) for team in ("teamA", "teamB")}
             label(left, [
                 "THE CLIP, with the recreation drawn back onto it",
                 "team ring = holds a player of its own    magenta bar = a second track on "
                 "somebody already held    red cross = lands on nobody",
                 f"{on} of {on + off} players held, {dupes} duplicate"
                 + f"   t {f.t:+.1f}s",
+                f"Blue {counts['teamA']} (light jerseys)   Yellow {counts['teamB']} (dark jerseys)"
+                "   Gray = unknown",
+                "Ball: VISIBLE (green ring)" if ball_visible else "Ball: no direct sighting this frame",
             ])
 
             right = board.copy()
             for pid, p in f.players.items():
                 team = track.roster[pid].team if pid in track.roster else "other"
                 cv2.circle(right, (sx(p.x), sy(p.y)), 8, COL.get(team, (150, 150, 150)), -1, cv2.LINE_AA)
-            if f.ball is not None:
+            observation = (ball_observations or {}).get(src)
+            assisted = bool(track.meta.get("reviewed_pass"))
+            ball_xy = ([f.ball.x,f.ball.y] if assisted and f.ball is not None else
+                       observation["field"] if observation and not assisted else
+                       ([f.ball.x, f.ball.y] if f.ball is not None and not ball_observations else None))
+            if ball_xy is not None:
                 seen = ball_seen_at(f.t) if callable(ball_seen_at) else True
-                cv2.circle(right, (sx(f.ball.x), sy(f.ball.y)), 9, (25, 35, 55), -1, cv2.LINE_AA)
-                cv2.circle(right, (sx(f.ball.x), sy(f.ball.y)), 6,
+                if observation:
+                    seen = True
+                if assisted:
+                    seen = False
+                cv2.circle(right, (sx(ball_xy[0]), sy(ball_xy[1])), 9, (25, 35, 55), -1, cv2.LINE_AA)
+                cv2.circle(right, (sx(ball_xy[0]), sy(ball_xy[1])), 6,
                            (235, 245, 250) if seen else (120, 185, 215), -1, cv2.LINE_AA)
             label(right, [
                 "THE RECREATION, same instant, seen from above",
                 f"t {f.t:+.1f}s   {len(f.players)} players   far sideline at top, as filmed",
+                ("ASSISTED ball: attributed to reviewed carriers; interpolated flight. Not direct detections."
+                 if assisted else "Ball positions during flight are ground-plane projections; altitude is unknown."),
             ])
 
             vw.write(np.vstack([left, rule, right]))

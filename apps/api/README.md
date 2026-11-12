@@ -1,7 +1,7 @@
 # apps/api
 
-HTTP service for the Hindsight replay app. It serves the files other streams
-already write and adds no data of its own:
+HTTP service for replay and video analysis. It serves exported plays and model
+reviews, and runs uploaded footage through the tracking pipeline:
 
 - **Plays**: Hindsight's play JSON (schemaVersion 1, see
   `packages/replay-engine/hindsight` README), from
@@ -9,6 +9,11 @@ already write and adds no data of its own:
 - **Model reviews**: `packages/counterfactual/reports/decisions.jsonl`, converted
   to the roles.md `Recommendation` shape by
   `gridiron_counterfactual.recommendation.from_report`.
+- **Video analysis**: `/video` uploads, candidate plays, field calibration,
+  analysis jobs, Hindsight replay JSON, optional Big Data Bowl CSV/rows,
+  reviewed pass/carrier annotations, model inference and browser replay/ball previews.
+  The [frontend integration guide](../../docs/video-analysis-api.md) includes the
+  request sequence, JSON shape, setup and a checked example for developing the UI.
 
 ## Run
 
@@ -20,6 +25,13 @@ uvicorn api.main:app --reload
 ```
 
 Open http://localhost:8000/docs to try every endpoint.
+
+For video analysis, use the root-based setup in the
+[frontend guide](../../docs/video-analysis-api.md). `GET /video` discovers the
+video routes. `GET /video/examples/nfl_sf_sea/tracking.csv` and
+`GET /video/examples/nfl_sf_sea/tracking` return CSV and Hindsight play JSON on a fresh
+checkout, without downloading models. Video code currently lives on `carrier-ball`;
+it must be merged before a checkout of `main` will expose these routes.
 
 ## Point Hindsight at it
 

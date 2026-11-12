@@ -169,6 +169,28 @@ function put(label) {
 
 function step(by) { i = Math.min(shots.length - 1, Math.max(0, i + by)); show(); }
 
+// --- the same pixel twice ------------------------------------------------------
+// A click saves the current frame and advances, which leaves the next frame under
+// a cursor that has not moved. Click again without moving and the new frame is
+// labelled at the old frame's point -- identical to the last decimal, because a
+// click is quantised to a screen pixel. It reads as a measurement and it is a
+// stray second click.
+//
+// 25 of the first 112 labels collected here are exact repeats, 20 of them one
+// kickoff: a ball in flight recorded at one fixed point, which is a box of grass
+// a ball-width behind the ball. Nothing downstream can tell those from real ones,
+// so they are refused here instead, where the person who can fix it is looking.
+//
+// Refused, not dropped: a second click on the warning means it. A ball really can
+// sit still on a tee, or under a camera panning with it.
+let lastPoint = null;   // {x, y} of the most recent visible label
+let armed = false;      // a repeat has been warned about and may now be confirmed
+
+function isRepeat(x, y) {
+  return lastPoint !== null
+      && Math.abs(x - lastPoint.x) < 2 && Math.abs(y - lastPoint.y) < 2;
+}
+
 // --- where a click lands in the SOURCE image, not the scaled one ---------------
 function sourceXY(ev) {
   const r = img.getBoundingClientRect();
@@ -181,6 +203,14 @@ function sourceXY(ev) {
 
 img.addEventListener('click', ev => {
   const { x, y } = sourceXY(ev);
+  if (isRepeat(x, y) && !armed) {
+    armed = true;
+    el('state').innerHTML = '<span class="nope">same point as the frame before — '
+      + 'move the cursor, press <kbd>N</kbd> if it is hidden, or click again to confirm</span>';
+    return;
+  }
+  armed = false;
+  lastPoint = { x, y };
   put({ key: shots[i].key, x, y, size: box });
   step(1);
 });
@@ -210,7 +240,7 @@ img.addEventListener('mouseleave', () => { glass.style.display = 'none'; });
 addEventListener('keydown', ev => {
   if (ev.key === 'ArrowRight') step(1);
   else if (ev.key === 'ArrowLeft') step(-1);
-  else if (ev.key.toLowerCase() === 'n') { put({ key: shots[i].key, x: null, y: null, size: box }); step(1); }
+  else if (ev.key.toLowerCase() === 'n') { lastPoint = null; armed = false; put({ key: shots[i].key, x: null, y: null, size: box }); step(1); }
   else if (ev.key.toLowerCase() === 'u') {
     const key = shots[i].key;
     delete labels[key]; show();
@@ -221,9 +251,9 @@ addEventListener('keydown', ev => {
   else if (ev.key === '-' || ev.key === '_') { box = Math.max(6, box - 2); show(); }
 });
 
-el('prev').onclick = () => step(-1);
+el('prev').onclick = () => { lastPoint = null; armed = false; step(-1); };
 el('next').onclick = () => step(1);
-el('noball').onclick = () => { put({ key: shots[i].key, x: null, y: null, size: box }); step(1); };
+el('noball').onclick = () => { lastPoint = null; armed = false; put({ key: shots[i].key, x: null, y: null, size: box }); step(1); };
 el('jump').onclick = () => { i = firstUnlabelled(); show(); };
 
 boot();

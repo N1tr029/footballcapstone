@@ -88,7 +88,8 @@ class Ball:
     A ball on a frame can be any of: a sighting the detector made and the filter
     accepted (``detected``), the filter's estimate carried across a gap where nobody
     could see it (``coasted``), or an attribution to whoever possession says is
-    carrying it (``carrier``) — which is not a sighting at all. Drawn identically
+    carrying it (``carrier``), or a path between reviewed endpoints
+    (``interpolated``) — neither is a sighting. Drawn identically
     they are indistinguishable, and two of the three are then being presented as
     something they are not.
 

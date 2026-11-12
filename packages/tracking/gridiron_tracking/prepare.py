@@ -33,6 +33,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field as dc_field
 from typing import Any
+from copy import deepcopy
 
 from . import field as fieldmod
 from . import roster as rostermod
@@ -145,7 +146,17 @@ def prepare(track: PlayTrack, offense: str | None = None) -> tuple[PlayTrack, Pr
     roster is clean, it is already oriented, and its meta already carries the
     situation.
     """
-    out, roster_report = rostermod.consolidate(track)
+    track = deepcopy(track)
+    if track.meta.get("identity", {}).get("anchorSourceFrame") is not None:
+        counts = {}
+        for entry in track.roster.values():
+            counts[entry.team] = counts.get(entry.team, 0) + 1
+        roster_report = rostermod.RosterReport(before=len(track.roster), after=len(track.roster),
+            per_side=counts, coverage=sum(len(f.players) for f in track.frames)/max(1,len(track.frames)*len(track.roster)),
+            notes=["Inspected formation identities retained, including temporarily unobserved athletes."])
+        out = track
+    else:
+        out, roster_report = rostermod.consolidate(track)
     report = PrepareReport(roster=roster_report)
 
     # --- is anything in this file a coordinate at all ------------------------
@@ -165,6 +176,8 @@ def prepare(track: PlayTrack, offense: str | None = None) -> tuple[PlayTrack, Pr
 
     situation = out.meta.get("broadcast") or {}
     los = situation.get("lineOfScrimmage")
+    if out.meta.get("mirrored") and out.meta.get("lineOfScrimmage") is not None:
+        los = out.meta["lineOfScrimmage"]
     attacks = situation.get("attacks") or out.meta.get("play_direction")
 
     # --- who has the ball ----------------------------------------------------
@@ -210,12 +223,13 @@ def prepare(track: PlayTrack, offense: str | None = None) -> tuple[PlayTrack, Pr
         )
 
     # --- which way is downfield ----------------------------------------------
-    if attacks == "left":
+    report.mirrored = bool(out.meta.get("mirrored"))
+    if attacks == "left" and not out.meta.get("mirrored"):
         fieldmod.mirror_track(out)
         report.mirrored = True
         if los is not None:
             los = fieldmod.LENGTH - los
-    elif attacks != "right":
+    elif attacks not in ("left", "right"):
         report.blockers.append(
             "which way the offense attacks is unknown, so the play may be mirrored. "
             "It comes free from the broadcast's own lines when the clip spec sets "
@@ -265,15 +279,14 @@ def prepare(track: PlayTrack, offense: str | None = None) -> tuple[PlayTrack, Pr
             "and no arrival. The review has nothing to key a forecast on. Set "
             "track.ball = true in the clip spec."
         )
+    elif out.meta.get("reviewed_pass"):
+        report.notes.append("Throw/catch and carriers were reviewed from film; the ball path includes attributed possession and interpolated flight, not continuous detections.")
     elif report.ball_travelled < MIN_BALL_TRAVEL:
         report.blockers.append(
             f"the ball track covers {report.ball_travelled:.1f} yards over the whole "
-            f"play, which nothing thrown or carried does. It is a track of something "
-            f"that does not move — on a televised game, the down-and-distance "
-            f"graphic sits on the field near the line of scrimmage and the generic "
-            f"sports-ball class finds it readily. A detection rate "
-            f"({report.ball_measured:.0%} here) says how often something was found "
-            f"and nothing about what."
+            f"play. This may be a partial flight or a false detection; it does not "
+            f"establish possession, throw and arrival. Review the pass window or "
+            f"provide a more complete ball track."
         )
     elif report.ball_measured < MIN_BALL_MEASURED:
         # Two different shortfalls reach this branch and they deserve different

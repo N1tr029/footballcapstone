@@ -80,7 +80,7 @@ class Frame(_Loose):
     frameId: int
     frameType: str
     event: Optional[str] = None
-    ball: BallSample
+    ball: Optional[BallSample] = None
     players: List[PlayerSample]
 
 
@@ -97,19 +97,19 @@ class PlayDetail(_Loose):
     schemaVersion: int
     gameId: int
     playId: int
-    homeTeam: str
-    visitorTeam: str
-    description: str
-    quarter: int
-    gameClock: str
-    driveNumber: int
-    down: int
-    yardsToGo: int
-    possessionTeam: str
-    defensiveTeam: str
-    lineOfScrimmage: float
-    firstDownLine: float
-    passResult: str
+    homeTeam: Optional[str] = None
+    visitorTeam: Optional[str] = None
+    description: Optional[str] = None
+    quarter: Optional[int] = None
+    gameClock: Optional[str] = None
+    driveNumber: Optional[int] = None
+    down: Optional[int] = None
+    yardsToGo: Optional[int] = None
+    possessionTeam: Optional[str] = None
+    defensiveTeam: Optional[str] = None
+    lineOfScrimmage: Optional[float] = None
+    firstDownLine: Optional[float] = None
+    passResult: Optional[str] = None
     frameRate: int
     snapFrameId: int
     players: List[PlayerInfo]

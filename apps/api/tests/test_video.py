@@ -12,7 +12,7 @@ from fastapi.testclient import TestClient
 import api.video as video
 from api.main import app
 from gridiron_tracking.clips import ClipSpec
-from gridiron_tracking.contract import PlayTrack
+from gridiron_tracking.contract import PlayTrack, TrackingFrame
 from gridiron_tracking.registration.homography import Homography
 from gridiron_tracking.registration.vision import AutoRegistration
 from gridiron_tracking import field
@@ -171,7 +171,7 @@ def test_run_calls_current_renderer_and_exposes_frontend_artifacts(client, sourc
         observed.append((spec, root))
         path = root / spec.name
         path.mkdir(parents=True)
-        track = PlayTrack(meta={"teams": {"max_players_per_team": 11},
+        track = PlayTrack(frames=[TrackingFrame(t=0,events=["ball_snap"])],meta={"teams": {"max_players_per_team": 11},
                                 "ball": {"image_observations": {"5": {"pixel": [10, 20]}}}})
         (path / "track.json").write_text(json.dumps(track.to_json()))
         (path / "report.txt").write_text("tracking is partial\n")
@@ -232,16 +232,23 @@ def test_unknown_resources_return_404(client):
 
 def test_bdb_example_is_available_without_local_runs_or_models(client):
     discovery = client.get("/video").json()
-    assert discovery["schema"] == "nfl-big-data-bowl-2025"
+    assert discovery["schema"] == "hindsight-play"
     listing = client.get(discovery["examples"]).json()["examples"]
     assert listing and listing[0]["name"] == "nfl_sf_sea"
     response = client.get(listing[0]["tracking"])
     assert response.status_code == 200
-    rows = response.json()
+    doc = response.json()
+    from api.schema import PlayDetail
+    PlayDetail.model_validate(doc)
+    assert doc["schemaVersion"] == 1 and "roster" not in doc
+    assert len(doc["players"]) == 22
+    assert doc["analysisReady"] and doc["trackingQuality"]["assisted"]
+    assert any(f["event"] == "pass_forward" for f in doc["frames"])
+    rows = client.get(listing[0]["tracking"]+"/rows").json()
     assert isinstance(rows, list) and rows[0]["club"] in ("SF", "SEA")
     assert set(rows[0]) == {"gameId", "playId", "nflId", "displayName", "frameId", "frameType",
                           "time", "jerseyNumber", "club", "playDirection", "x", "y", "s", "a", "dis", "o", "dir", "event"}
-    assert len([r for r in rows if r["club"] == "football"]) == 2
+    assert len([r for r in rows if r["club"] == "football"]) > 60
     csv_response = client.get(listing[0]["csv"])
     assert csv_response.status_code == 200 and csv_response.headers["content-type"].startswith("text/csv")
     metadata = client.get("/video/examples/nfl_sf_sea/tracking/metadata").json()
@@ -266,6 +273,63 @@ def test_bdb_row_schema_is_discoverable_in_openapi(client):
     row = schema["components"]["schemas"]["BDBTrackingRow"]
     assert "frameType" in row["properties"] and "nflId" in row["properties"]
     assert "/video/clips/{name}/tracking.csv" in schema["paths"]
+
+
+def _checked_track(client):
+    raw = json.loads((video.EXAMPLES/"nfl_sf_sea.track.json").read_text())
+    dest = video.RUNS/"checked"
+    dest.mkdir(parents=True)
+    (dest/"track.json").write_text(json.dumps(raw))
+    return raw,dest
+
+
+def test_primary_video_endpoints_share_the_replay_contract(client):
+    raw,_ = _checked_track(client)
+    doc = client.get("/video/clips/checked/tracking").json()
+    assert doc == client.get("/video/clips/checked/track").json()
+    from api.schema import PlayDetail
+    PlayDetail.model_validate(doc)
+    assert len(doc["players"]) == 22 and doc["analysisReady"]
+    assert sum("ball" in f for f in doc["frames"]) == 95
+    assert client.get("/video/clips/checked/track/raw").json() == raw
+
+
+def test_incomplete_video_review_returns_actionable_blockers(client):
+    raw,path = _checked_track(client)
+    raw["meta"].pop("reviewed_pass")
+    for f in raw["frames"]:
+        f["ball"] = None
+        f["events"] = [e for e in f["events"] if not e.startswith("pass_")]
+    (path/"track.json").write_text(json.dumps(raw))
+    doc = client.get("/video/clips/checked/tracking").json()
+    assert not doc["analysisReady"] and doc["analysisBlockers"]
+    response = client.post("/video/clips/checked/review")
+    assert response.status_code == 422
+    assert response.json()["detail"]["analysisBlockers"] == doc["analysisBlockers"]
+
+
+def test_pass_annotation_is_validated_before_save_and_returns_replay_json(client):
+    raw,_ = _checked_track(client)
+    spec = ClipSpec(name="checked",video="unused.mp4",start=1575,stop=1865,snap_frame=1672)
+    spec.save(video.SPEC_DIR)
+    valid = {"throwFrame":1769,"catchFrame":1780,"passerId":"p02","receiverId":"p07","centerId":"p18"}
+    invalid = client.post("/video/clips/checked/pass-review",json=valid|{"receiverId":"missing"})
+    assert invalid.status_code == 422
+    assert not ClipSpec.load("checked",video.SPEC_DIR).reviewed_pass
+    response = client.post("/video/clips/checked/pass-review",json=valid)
+    assert response.status_code == 200 and response.json()["analysisReady"]
+    assert ClipSpec.load("checked",video.SPEC_DIR).reviewed_pass == valid
+    assert client.get("/video/clips/checked/tracking").json() == response.json()
+
+
+def test_identity_update_requires_rerun_before_serving_stale_results(client):
+    raw,_ = _checked_track(client)
+    spec = ClipSpec(name="checked",video="unused.mp4",start=1575,stop=1865,snap_frame=1672)
+    spec.save(video.SPEC_DIR)
+    response = client.post("/video/clips/checked/identities",json={"fullRosterFrame":1580,"anchors":[]})
+    assert response.status_code == 200 and response.json()["rerunRequired"]
+    response = client.get("/video/clips/checked/tracking")
+    assert response.status_code == 409 and "rerun" in response.json()["detail"]
 
 
 @pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg optional outside the video server")

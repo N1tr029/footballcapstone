@@ -216,8 +216,7 @@ def test_a_ball_that_never_moves_is_not_a_ball():
 
     assert report.ball_measured == 0.42      # a confident detection rate
     assert not report.reviewable             # and a worthless track
-    assert any("does not move" in b for b in report.blockers)
-    assert any("graphic" in b for b in report.blockers)
+    assert any("partial flight or a false detection" in b for b in report.blockers)
 
 
 def test_a_ball_that_travels_passes():

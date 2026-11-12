@@ -1,32 +1,35 @@
-# Video analysis API for the frontend
+# Video analysis API
 
-The FastAPI app exposes the footage pipeline under `/video`. Its public tracking
-output matches the **Big Data Bowl 2025 `tracking_week_*.csv` columns**, as requested
-for [this archive](https://www.kaggle.com/datasets/alexandermeau/nfl-big-data-bowl-archived-data-2025).
-Start with an upload, choose a play window, calibrate the field, then run analysis and poll its job.
-OpenAPI is available at `http://localhost:8000/docs`.
+The FastAPI app is **Football Capstone API**. Video JSON uses the same Hindsight
+schemaVersion 1 as `GET /plays/{id}`, produced by `hindsight.to_play_json`.
+`GET /video/clips/{name}/track` and `/tracking` both return that play document:
+`players[]`, `frames[].players[]`, integer `nflId`, `snapFrameId` and `frameRate`.
+The internal `roster`/player maps are available only at `/track/raw`.
 
-This code is on the `carrier-ball` branch. Fetching `main` alone will not include
-the video API until that branch is merged. A Git push publishes the backend code;
-it does not provision a hosted server. Start the service below on the backend host.
+**Migration:** `/tracking` previously returned Big Data Bowl rows. Those rows now
+live at `/tracking/rows`; the 18-column `/tracking.csv` export remains available.
+Use `/tracking` for the replay frontend and `/review` for the play model.
+
+Code is on `carrier-ball`, PR #10. Start a backend host after checking out that
+branch; pushing the code does not provision a hosted API.
 
 ## Start the backend
 
-From the repository root, using Python 3.11 or newer:
+From the repository root, with Python 3.11+:
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install -r apps/api/requirements.txt
 python -m pip install -e './packages/tracking[video,detect]'
+python -m pip install -e ./packages/counterfactual
 uvicorn api.main:app --app-dir apps/api --reload
 ```
 
-Install `ffmpeg` on the backend host for H.264 browser previews. On macOS:
-
-```bash
-brew install ffmpeg
-```
+Install FFmpeg for browser previews (`brew install ffmpeg` on macOS).
+Open `http://localhost:8000/docs` for the API contract. Local frontend CORS is
+supported. The two coordinate model files are committed under
+`packages/counterfactual/models`; no Kaggle download is required to run a review.
 
 Automatic field reading uses downloaded Qwen through MLX on Apple Silicon:
 
@@ -35,56 +38,59 @@ python -m pip install -e './packages/tracking[local-vision]'
 python scripts/setup_local_vision.py
 ```
 
-This downloads approximately 6 GB once. An existing model directory can be reused
-through `FOOTBALL_LOCAL_MODELS_DIR` in `.env`; see
-[`packages/tracking/README.md`](../packages/tracking/README.md). Pinned field
-calibration works without the local reader. Model weights, uploads, cached
-detections and generated videos are local artifacts and are not included in Git.
+The local reader needs approximately 6 GB once. Reuse an existing download with
+`FOOTBALL_LOCAL_MODELS_DIR` in `.env`. Pinned field calibration works without it.
+Uploaded footage, detections and generated videos are local artifacts, not in Git.
 
-For UI development without models or video processing, start the server and use:
+## Try the checked example
 
 ```bash
-curl http://localhost:8000/video
-curl http://localhost:8000/video/examples/nfl_sf_sea/tracking.csv
 curl http://localhost:8000/video/examples/nfl_sf_sea/tracking
+curl http://localhost:8000/video/examples/nfl_sf_sea/tracking/rows
+curl http://localhost:8000/video/examples/nfl_sf_sea/tracking.csv
 curl http://localhost:8000/video/examples/nfl_sf_sea/tracking/metadata
 ```
 
-The committed [CSV](examples/nfl_sf_sea.tracking.csv) and
-[JSON rows](examples/nfl_sf_sea.tracking.json) contain the checked video output.
-These example endpoints work on a fresh checkout, with no uploaded film or model
-download. [`nfl_sf_sea.track.json`](examples/nfl_sf_sea.track.json) is the internal
-debugging representation; it is not the Big Data Bowl interface.
+These work on a fresh checkout without models or source footage. The committed
+[play JSON](examples/nfl_sf_sea.play.json) is the replay format; the
+[internal track](examples/nfl_sf_sea.track.json) retains diagnostic provenance.
 
-## Request sequence
+This is an **assisted example**: field calibration, a full 22-athlete formation,
+QB/RB identity corrections and throw/catch were reviewed from film. The review is
+recorded in [the annotation](calibration/nfl_sf_sea-review.json). It contains:
 
-All paths below are relative to the backend origin, usually
-`http://localhost:8000`. CORS permits GET and POST from a separate local frontend.
+- 22 roster IDs, 11 SF / 11 SEA; no births after the inspected formation.
+- 97 output frames at 10 Hz, with the snap exactly at t=0.
+- `pass_forward` at 3.2s and `pass_arrived` + `pass_outcome_caught` at 3.6s.
+- Ball positions in 95 frames: 92 attributed carrier positions and 3 interpolated
+  flight positions. Two frames remain unknown. This is not 95 visual detections.
+- Seven actual source-image sightings at frames 1772–1778, preserved separately.
 
-| Step | Request | Response/use |
+The broadcast crops players out. Mean observed roster is about 17 players per
+frame; same-kit crossings remain uncertain. A 22-person roster does not establish
+22 accurate continuous trajectories. Model results on this sample are a partial,
+low-confidence demonstration, not validated football advice.
+
+## Upload and analyze
+
+| Step | Request | Response |
 | --- | --- | --- |
-| Upload | `POST /video/uploads`, multipart field `file` | `videoId`, `sourceUrl`, `media` with FPS, frame count, width, height and duration |
-| Preview source | `GET {sourceUrl}` | Uploaded source video; browser support depends on its original codec |
-| Find plays | `POST /video/{videoId}/scan` | `{jobId}`; poll to get ranked candidate shots |
-| Poll | `GET /video/jobs/{jobId}` | `state`: `running`, `done` or `failed`; completed result is in `result`, failure text in `error` |
-| Create clip | `POST /video/clips` | Saves a named window and returns `clip` and `next`; example body below |
-| List clips | `GET /video/clips` | `clip`, title, registration state, frame window and whether a track exists |
-| Calibration image | `GET /video/clips/{name}/frame?f={sourceFrame}` | JPEG; `X-Frame`, `X-Width`, `X-Height` headers describe the original coordinates |
-| Auto-calibrate | `POST /video/clips/{name}/register` | `registered`, `frame`, verdict and paint score; may take minutes while the local model reads the frame |
-| Click calibration | `POST /video/clips/{name}/pin` | `registered`, `paintAlignment`, acceptance `bar` and `next` |
-| Analyze | `POST /video/clips/{name}/run` | `{jobId, clip}`; poll for `hasTrack`, quality metadata and artifact URLs |
-| Tracking rows | `GET /video/clips/{name}/tracking` | Array of Big Data Bowl 2025 tracking records |
-| Tracking CSV | `GET /video/clips/{name}/tracking.csv` | The exact 18-column Big Data Bowl tracking header |
-| Export provenance | `GET /video/clips/{name}/tracking/metadata` | Synthetic identity map, missing metadata and observation sources |
-| Internal debug track | `GET /video/clips/{name}/track` | Internal `PlayTrack` JSON, retained for diagnostics |
-| Report | `GET /video/clips/{name}/report` | Plain-text geometry/tracking checks |
-| Replay | `GET /video/clips/{name}/reconstruction.mp4` | H.264 source overlay and top-down reconstruction |
-| Ball preview | `GET /video/clips/{name}/ball-tracking.mp4` | H.264 slow-motion crop, when visible ball flight was found |
-
-Shot `endFrame` is inclusive; clip `stopFrame` is exclusive. Set
-`stopFrame = candidate.endFrame + 1`. All source frame indices are zero-based.
-Clip names accept letters, numbers, `_` and `-`, up to 80 characters. Creating an
-existing name returns 409 and preserves its calibration.
+| Upload | `POST /video/uploads`, multipart `file` | `videoId`, source URL, FPS, frame count, dimensions |
+| Find plays | `POST /video/{videoId}/scan` | Job ticket with candidate windows |
+| Poll | `GET /video/jobs/{jobId}` | `running`, `done`, `failed`; result/error |
+| Create clip | `POST /video/clips` | Named clip spec |
+| Inspect image | `GET /video/clips/{name}/frame?f={sourceFrame}` | JPEG with original pixel dimensions in headers |
+| Auto-calibrate | `POST /video/clips/{name}/register` | Registration result; may need clicked points |
+| Pin calibration | `POST /video/clips/{name}/pin` | Validated field homography |
+| Review identities | `POST /video/clips/{name}/identities` | Save formation/identity anchors, then rerun |
+| Run tracking | `POST /video/clips/{name}/run` | Job ticket; result has artifact URLs and readiness |
+| Replay JSON | `GET /video/clips/{name}/tracking` or `/track` | Hindsight play JSON plus quality/readiness |
+| Review a pass | `POST /video/clips/{name}/pass-review` | Completed-pass annotation; returns updated play JSON |
+| Run model | `POST /video/clips/{name}/review` | Recommendation, notes and forecast in Hindsight format |
+| Debug | `GET /video/clips/{name}/track/raw` | Original sparse tracking and evidence |
+| Report | `GET /video/clips/{name}/report` | Geometry checks and assisted-ball summary |
+| Replay video | `GET /video/clips/{name}/reconstruction.mp4` | Browser H.264 replay |
+| Ball evidence | `GET /video/clips/{name}/ball-tracking.mp4` | Slow motion of actual visible flight, when available |
 
 ```json
 {
@@ -93,7 +99,7 @@ existing name returns 409 and preserves its calibration.
   "startFrame": 120,
   "stopFrame": 420,
   "snapFrame": 210,
-  "title": "Practice play 1",
+  "fullRosterFrame": 150,
   "level": "nfl",
   "playDirection": "left",
   "teamAClub": "SF",
@@ -101,144 +107,119 @@ existing name returns 409 and preserves its calibration.
 }
 ```
 
-`level` accepts `nfl`, `college` or `high_school`. `snapFrame` is optional; when
-omitted the clip start is used as time zero. Select a single short play: rendering
-decodes its frames into memory. Shot scanning streams the full upload.
-`gameId`, `playId` and `startTime` are optional verified metadata; `startTime`
-timestamps the first exported frame. If identifiers are not supplied, local
-synthetic game/play IDs are generated and declared in the metadata endpoint.
-Unknown names, jersey numbers and wall-clock time remain unknown. Club inputs map
-the lighter (`teamA`) and darker (`teamB`) kit groups to the supplied abbreviations.
+Source frame indices are zero-based; `stopFrame` is exclusive. Scan `endFrame` is
+inclusive, so add one. `fullRosterFrame` is a manually inspected frame with exactly
+22 athlete detections. It enables fixed roster tracking: local IDs `p00..p21`
+remain dormant across missed detections instead of spawning new players.
+Visible player counts can be unequal in cropped frames. The anchor must really
+contain 11 per team; choosing an arbitrary frame is not a roster check.
 
-When auto-calibration returns `registered: false`, show its `problems` and the
-calibration image. Submit at least four well-spread field correspondences to
-`/pin`, preferably six across both sidelines and several yard lines:
+`level` accepts `nfl`, `college`, `high_school`. Name the actual `snapFrame` for
+model analysis. Optional `gameId`, `playId`, `startTime` and club labels annotate
+known metadata. Otherwise IDs are local/synthetic and timestamps remain unknown.
+Team A is the lighter kit and B the darker kit. Existing clip names return 409.
 
-```json
-{
-  "frame": 210,
-  "points": [
-    {"field": [30, 0], "pixel": [125, 690]},
-    {"field": [50, 0], "pixel": [1100, 690]},
-    {"field": [30, 53.3], "pixel": [380, 140]},
-    {"field": [50, 53.3], "pixel": [970, 140]}
-  ]
-}
-```
-
-These illustrate the request shape; use measurements from the actual image.
-Convert canvas clicks to original image pixels before submitting. A refused fit
-does not overwrite the saved homography. The same paint gate applies to automatic
-and clicked calibration.
-
-The current development server runs one analysis job at a time to limit memory.
-Jobs are held in process memory and are lost on restart. Treat `done` as job
-completion, then check `result.hasTrack` and `result.problems`: a rejected
-registration can complete normally with `hasTrack: false`. A thrown runtime error
-sets the job to `failed`. Only show video links present in `result.assets`:
+For pinned registration, submit at least four (preferably six) real field/image
+correspondences, spread across sidelines and yard lines:
 
 ```json
-{
-  "clip": "practice_001",
-  "hasTrack": true,
-  "assets": {
-    "tracking": "/video/clips/practice_001/tracking",
-    "trackingCsv": "/video/clips/practice_001/tracking.csv",
-    "trackingMetadata": "/video/clips/practice_001/tracking/metadata",
-    "track": "/video/clips/practice_001/track",
-    "reconstruction": "/video/clips/practice_001/reconstruction.mp4",
-    "ballPreview": "/video/clips/practice_001/ball-tracking.mp4"
-  }
-}
+{"frame":210,"points":[
+  {"field":[30,0],"pixel":[125,690]},
+  {"field":[50,0],"pixel":[1100,690]},
+  {"field":[30,53.3],"pixel":[380,140]},
+  {"field":[50,53.3],"pixel":[970,140]}
+]}
 ```
 
-The actual result also contains `problems`, `stages`, `seconds`, `teams` and
-`ball`. Missing FFmpeg leaves tracking available and reports unavailable browser
-previews. Join artifact paths to the backend origin. Replay endpoints support
-byte-range requests for seeking.
+These only illustrate shape. Use actual image measurements. Convert display clicks
+to original image pixels. A refused fit preserves the previous calibration.
 
-## Big Data Bowl tracking format
+To correct a same-kit crossing, supply reviewed source-frame field points:
 
-Both public endpoints return one row per player/frame, plus a football row when
-a ball position exists. CSV has exactly this ordered header; JSON has the same keys:
-
-```csv
-gameId,playId,nflId,displayName,frameId,frameType,time,jerseyNumber,club,playDirection,x,y,s,a,dis,o,dir,event
+```json
+{"fullRosterFrame":150,"anchors":[
+  {"frame":300,"playerId":"p02","field":[78.2,29.4]}
+]}
 ```
 
-`frameId` is one-based and contiguous at 10 Hz. `frameType` is `BEFORE_SNAP`,
-`SNAP` or `AFTER_SNAP`. The ball has `displayName=football`, `club=football` and an
-empty/null `nflId`. Missing balls produce no football row. `o` and `dir` use the
-NFL compass convention: **0 along +y, 90 along +x**, clockwise. `dis` is actual
-distance between consecutive observed positions, not `s/10`; it is null after a
-gap. The timestamp is null unless a real start time is supplied. Null CSV fields
-are empty cells. All extra quality and provenance information lives outside the
-18 columns in the metadata response.
+POST this to `/identities`, then `/run`. Points are yards in the original calibrated
+field orientation. An anchor must match an actual detection within three yards.
+It is an identity correction, not permission to invent a position. Updated
+identity configuration makes the old play endpoint return 409 until rerun.
 
-Coordinates are yards in the calibrated field orientation; `playDirection`
-records the offense's actual direction. For NGS imports that were normalized by
-our reader, the exporter restores the original field orientation. The example
-video attacks left and has SF/SEA club labels. Its game/play IDs and tracked player
-IDs are explicitly synthetic; this does not identify the actual NFL athletes.
-This interface reproduces the tracking-file schema, not the full archive's game,
-play, player biography and annotation tables.
+## Sparse balls and assisted passes
 
-## Internal debugging format
+Unreviewed clips may have only a few sightings. They remain replayable but return
+`analysisReady:false` and actionable `analysisBlockers`. `/review` returns 422
+until the required ball/pass inputs exist. A completed processing job does not
+mean a model-ready play; check `hasTrack`, `analysisReady`, `analysisBlockers` and
+`trackingQuality` before starting the model.
 
-`roster` maps identity IDs to entries containing `team`. `frames` contains time
-`t` in seconds from the snap, a sparse `players` map, optional `ball` and events.
-The internal angles use 0 along +x and differ from the public NFL rows above.
-Tracking is sampled at 10 Hz. For display, interpolate positions only between
-adjacent frames containing the same identity. Iterate the identities present in
-each frame; do not assume the entire roster is visible at every instant.
+If a completed pass cannot be resolved automatically, review the film and POST:
 
-Coordinates are yards: `x` runs along a 120-yard field including end zones, and
-`y` runs across its 53.3-yard width. Field calibration does not by itself rotate
-every offense to the same attack direction. The checked example attacks left.
+```json
+{"throwFrame":1769,"catchFrame":1780,"passerId":"p02","receiverId":"p07","centerId":"p18"}
+```
 
-The current colour convention is blue for `teamA` (lighter kit), yellow for
-`teamB` (darker kit), gray for `unknown`. These are appearance groups, not official
-club IDs. Team assignment has a per-frame limit of 11 per side. Equality is
-required only at an explicitly inspected `full_roster_frame`; cropped shots can
-show unequal counts. The SF/SEA example has a checked 11/11 opening formation.
+This is the actual checked example annotation. Use each clip's own frame indices
+and raw `trackId` values from `players[]`. A distinct passer and receiver on the
+same team must have observed poses at their respective events. `centerId` is
+optional; without it pre-snap ball positions stay unknown. A valid review saves
+onto the clip spec and updates the JSON immediately. Rerun to update rendered
+videos and raw CSV artifacts as well. Incomplete passes and interceptions are
+not supported by this completed-pass annotation route.
 
-Ball sourcing must remain visible in the UI:
+The ball follows the reviewed center through the snap, the passer until release,
+and receiver after catch, only while those poses exist. During flight its ground
+position is linearly interpolated between those endpoints. Ball height is unknown;
+this is not 3D flight reconstruction. Source-image pixels remain evidence, never
+replaced with interpolated sightings. The timings are rounded to the 10 Hz export;
+original source frames remain in provenance. Example review timing is approximate
+within about two source frames.
 
-- `detected`: accepted visual evidence.
-- `coasted`: an extrapolated estimate between sightings.
-- `carrier`: an inferred ball position attributed to a player.
-- Missing/null ball: no position; hide its marker.
+## Frontend contract
 
-New clips created through the API enable motion-based visible-flight detection
-and disable the generic sports-ball detector and carrier estimator. Motion
-detection currently targets isolated brown footballs over turf; it has been
-visually checked on the SF/SEA pass, not validated broadly across broadcasts.
+- `players[]` is the roster. Key markers by `nflId`, not array index. `trackId` maps
+  to raw video identity. `club` is SF/SEA when supplied; `side` is offense/defense.
+- `frames[].players[]` contains only observed or briefly interpolated poses. Do not
+  freeze missing players or create them at (0,0). Gaps over 0.25s stay unfilled.
+- Time is `(frameId - snapFrameId) / frameRate`. Offense attacks +x; angles use
+  NFL compass bearings (0 along +y, 90 along +x).
+- `event` is the primary event for existing consumers; `events[]` preserves both
+  arrival and caught events on the same frame.
+- Optional `ball.dataOrigin` distinguishes `detected`, `carrier`, `coasted` and
+  `interpolated`. `carrierNflId` explicitly identifies an attributed carrier.
+  Hide the ball marker on missing-ball frames.
+- `provenance.ball.image_observations` contains original pixel sightings indexed
+  by source frame. Only these support rings on the actual footage. Ground-plane
+  projection of an airborne pixel is not its real position at ground height.
+- `trackingQuality` includes roster/visible counts, ball sources, missing players
+  at throw/arrival, assistance and geometry checks. Geometry agreement does not
+  establish identity accuracy.
+- `/review` uses the real coordinate model and returns a low-confidence video
+  recommendation with coverage caveats. The forecast retains original player IDs
+  and snap clock. `simulationStartFrameId` marks where model output begins.
+  It cannot model an athlete with no recent observed pose. Missing defenders can
+  make a receiver appear more open than in reality.
 
-The checked output contains seven visible source frames (1772–1778), of which two
-fall on the 10 Hz grid. Full-rate pixel sightings live in
-`meta.ball.image_observations`, keyed by source frame index. Each records `pixel`,
-`field`, `bbox`, `confidence` and `frame`. The confidence is a candidate quality
-score, not a calibrated probability. A ring on the source video must use that
-frame's own pixel sighting. Ground coordinates during flight are projections;
-ball height is unknown. Hidden ball frames stay unknown.
+Use `/tracking/rows` or `/tracking.csv` for the optional Big Data Bowl 2025
+`tracking_week_*` 18-column interface, and `/tracking/metadata` for its identifier
+map and sources. These retain the original field orientation. The normalized
+Hindsight JSON is the frontend interface.
 
-Player identities still fragment and can switch during contact. Conflicting
-jersey segments are split, so the roster can contain many more than 22 IDs while
-visible team counts remain bounded. This output supports a visual analysis UI;
-continuous identities and a complete ball path remain open tracking work.
+Analysis jobs run one at a time and live only in process memory; restart loses job
+tickets. Join asset URLs to the backend origin. H.264 replay endpoints support
+byte ranges. Missing FFmpeg reports unavailable previews without discarding tracks.
+Only show assets returned by a successful job. A refused registration can complete
+with `hasTrack:false`; runtime errors set the job to `failed`.
 
-## Verification
+## Validation
 
 ```bash
-python -m pytest apps/api/tests/test_video.py packages/tracking/tests -q
+python -m pytest -q
 ```
 
-API tests cover uploads, real shot scanning, source/frame serving, registration
-success/refusal, paint-gated pinning, job states, artifact links and video ranges.
-The expensive model/render boundary is stubbed in endpoint tests; the browser
-encoder is tested against a real short video when FFmpeg is installed. Tracking
-tests exercise team capacity, partial views, jersey conflicts, camera motion and
-ball evidence.
-Big Data Bowl export tests check the real release header, angle conversion,
-frame numbering, timestamps, true displacement, missing samples, football IDs
-and ingestion by the existing NGS reader.
+Tests cover the replay schema, sparse-ball rejection, reviewed event/carrier
+provenance, missing poses, dormant identities, stable forecast IDs and actual
+model inference on the checked video fixture. Source video rerenders are a
+separate local check; detector/render calls are stubbed in routine API tests.

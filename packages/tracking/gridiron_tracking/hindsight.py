@@ -121,20 +121,20 @@ def read_play(source: str | Path | dict[str, Any]) -> PlayTrack:
                 dir=float(ngs_angle_to_contract(float(p.get("dir") or 0.0))),
                 o=(float(ngs_angle_to_contract(float(o))) if o is not None
                    else float(ngs_angle_to_contract(float(p.get("dir") or 0.0)))),
-                o_source="measured" if o is not None else "from_dir",
+                o_source=p.get("oSource") or ("measured" if o is not None else "from_dir"),
             )
 
         ball = None
         if f.get("ball"):
             b = f["ball"]
-            ball = Ball(x=float(b["x"]), y=float(b["y"]))
+            ball = Ball(x=float(b["x"]), y=float(b["y"]), source=b.get("dataOrigin"))
 
         event = f.get("event")
         frames.append(TrackingFrame(
             t=round((fid - snap) / rate, 3),
             players=players,
             ball=ball,
-            events=[str(event)] if event else [],
+            events=list(f.get("events") or ([str(event)] if event else [])),
         ))
 
     _difference_acceleration(frames, 1.0 / rate)
@@ -144,11 +144,12 @@ def read_play(source: str | Path | dict[str, Any]) -> PlayTrack:
     # became an ordinary one the moment it round-tripped, and the counterfactual
     # CLI then reviewed its own output and wrote forecasts of forecasts.
     simulated = bool(d.get("simulated"))
+    coord_source = d.get("provenance",{}).get("coordinates",{}).get("source")
 
     meta: dict[str, Any] = {
         "game_id": d.get("gameId"),
         "play_id": d.get("playId"),
-        "source": "simulated" if simulated else "ngs",
+        "source": "simulated" if simulated else coord_source or "ngs",
         "simulated": simulated,
         "source_detail": (
             "a forecast written by packages/counterfactual; this play did not happen"
@@ -177,6 +178,13 @@ def read_play(source: str | Path | dict[str, Any]) -> PlayTrack:
             meta[key] = d[key]
     if d.get("simulatedFrom") is not None:
         meta["simulated_from_play"] = d["simulatedFrom"]
+    if coord_source == "vision":
+        meta["source_detail"] = "Estimated from video; see exported provenance"
+        meta["prepare_report"] = {"reviewable":bool(d.get("analysisReady")), "blockers":d.get("analysisBlockers",[])}
+        meta["tracking_quality"] = d.get("trackingQuality",{})
+        meta["reviewed_pass"] = d.get("provenance",{}).get("reviewedPass")
+        meta["play_direction"] = d.get("provenance",{}).get("sourcePlayDirection","right")
+        meta["mirrored"] = d.get("provenance",{}).get("mirrored",False)
 
     return PlayTrack(meta=meta, roster=roster, frames=frames)
 
@@ -240,7 +248,8 @@ def to_play_json(
             "jerseyNumber": entry.num if entry.num is not None else 0,
             "club": entry.team,
             "position": entry.role or "",
-            "side": _side(entry.team),
+            "side": ("offense" if entry.team == state.get("possessionTeam") else
+                     "defense" if entry.team == state.get("defensiveTeam") else _side(entry.team)),
             # Outside schemaVersion 1, and the only way back to the track this came
             # from once the id has been synthesised.
             "trackId": pid,
@@ -255,6 +264,7 @@ def to_play_json(
             "frameType": ("SNAP" if i == snap_index
                           else "BEFORE_SNAP" if i < snap_index else "AFTER_SNAP"),
             "event": f.events[0] if f.events else None,
+            "events": list(f.events),
             "players": [
                 {
                     "nflId": ids[pid],
@@ -280,6 +290,9 @@ def to_play_json(
                 # and one interpolated between two people are both a position, and
                 # only this says which. See contract.Ball.
                 frame["ball"]["dataOrigin"] = f.ball.source
+            carrier = track.meta.get("ball",{}).get("carriers",{}).get(str(i+1))
+            if carrier in ids:
+                frame["ball"]["carrierNflId"] = ids[carrier]
         frames.append(frame)
 
     doc: dict[str, Any] = {
@@ -300,6 +313,8 @@ def to_play_json(
     from .export import provenance
 
     doc["provenance"] = provenance(track)
+    doc["provenance"]["sourcePlayDirection"] = track.meta.get("play_direction","right")
+    doc["provenance"]["mirrored"] = bool(track.meta.get("mirrored"))
     doc["simulated"] = track.meta.get("source") == "simulated"
     if track.meta.get("simulated_from_play") is not None:
         # Which real play this forecast argues with. Outside schemaVersion 1 and
@@ -382,14 +397,22 @@ def nfl_ids(track: PlayTrack) -> dict[str, int]:
     same ids and a re-export does not shuffle the roster.
     """
     out: dict[str, int] = {}
-    synthetic = 0
+    fixed = track.meta.get("export_nfl_ids",{})
     for pid in sorted(track.roster):
-        real = _maybe_int(pid)
-        if real is not None and 0 < real < SYNTHETIC_ID_BASE:
+        real = _maybe_int(fixed.get(pid,pid))
+        # Already-exported local numeric IDs must also survive a round trip.
+        if real is not None and 0 < real < 2**31:
             out[pid] = real
-        else:
+    if len(set(out.values())) != len(out):
+        raise ValueError("export player IDs must be unique")
+    used = set(out.values()); synthetic = SYNTHETIC_ID_BASE
+    for pid in sorted(track.roster):
+        if pid not in out:
             synthetic += 1
-            out[pid] = SYNTHETIC_ID_BASE + synthetic
+            while synthetic in used:
+                synthetic += 1
+            out[pid] = synthetic
+            used.add(synthetic)
     return out
 
 

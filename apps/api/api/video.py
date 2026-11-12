@@ -20,11 +20,11 @@ from pathlib import Path
 from typing import Any, Literal, Optional
 
 from fastapi import APIRouter, File, HTTPException, UploadFile
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, Response, JSONResponse
 from pydantic import BaseModel, Field, model_validator
 
 from .store import REPO_ROOT
-from .schema import BDBTrackingRow
+from .schema import BDBTrackingRow, PlayDetail
 
 router = APIRouter(prefix="/video", tags=["video"])
 
@@ -96,6 +96,7 @@ class ClipRequest(BaseModel):
     startFrame: int = Field(ge=0)
     stopFrame: int = Field(gt=0, description="Exclusive source-frame boundary")
     snapFrame: Optional[int] = Field(default=None, ge=0)
+    fullRosterFrame: Optional[int] = Field(default=None, ge=0, description="Inspected frame containing exactly 11 athletes per team")
     title: str = ""
     level: Literal["nfl", "college", "high_school"] = "college"
     gameId: Optional[int] = Field(default=None, gt=0)
@@ -111,6 +112,8 @@ class ClipRequest(BaseModel):
             raise ValueError("stopFrame must be greater than startFrame")
         if self.snapFrame is not None and not self.startFrame <= self.snapFrame < self.stopFrame:
             raise ValueError("snapFrame must be inside the clip window")
+        if self.fullRosterFrame is not None and not self.startFrame <= self.fullRosterFrame < self.stopFrame:
+            raise ValueError("fullRosterFrame must be inside the clip window")
         if self.teamAClub is not None and self.teamAClub == self.teamBClub:
             raise ValueError("the two teams must have different club labels")
         return self
@@ -124,6 +127,31 @@ class Point(BaseModel):
 class PinRequest(BaseModel):
     points: list[Point]
     frame: Optional[int] = Field(default=None, ge=0)
+
+
+class PassReviewRequest(BaseModel):
+    throwFrame: int = Field(ge=0)
+    catchFrame: int = Field(ge=0)
+    passerId: str
+    receiverId: str
+    centerId: Optional[str] = None
+
+    @model_validator(mode="after")
+    def ordered(self):
+        if self.catchFrame <= self.throwFrame:
+            raise ValueError("catchFrame must follow throwFrame")
+        return self
+
+
+class IdentityAnchor(BaseModel):
+    frame: int = Field(ge=0)
+    playerId: str
+    field: tuple[float,float]
+
+
+class IdentityReviewRequest(BaseModel):
+    fullRosterFrame: int = Field(ge=0)
+    anchors: list[IdentityAnchor] = Field(default_factory=list)
 
 
 def _name(name: str) -> str:
@@ -160,7 +188,7 @@ def _finite(value):
 
 @router.get("", summary="Video API discovery and Big Data Bowl output links")
 def discover():
-    return {"schema": "nfl-big-data-bowl-2025", "docs": "/docs", "examples": "/video/examples",
+    return {"schema": "hindsight-play", "schemaVersion": 1, "docs": "/docs", "examples": "/video/examples",
             "uploads": "/video/uploads", "clips": "/video/clips",
             "trackingJson": "/video/clips/{name}/tracking",
             "trackingCsv": "/video/clips/{name}/tracking.csv"}
@@ -174,20 +202,33 @@ def examples():
                          for p in sorted(EXAMPLES.glob("*.track.json"))]}
 
 
-def _example_data(name):
+def _example_track(name):
     _name(name)
     path = EXAMPLES / f"{name}.track.json"
     if not path.is_file():
         raise HTTPException(404, f"no example {name}")
     _tracking()
-    from gridiron_tracking import bdb
     from gridiron_tracking.contract import PlayTrack
-    return bdb.convert(PlayTrack.from_json(json.loads(path.read_text())))
+    return PlayTrack.from_json(json.loads(path.read_text()))
 
 
-@router.get("/examples/{name}/tracking", response_model=list[BDBTrackingRow],
-            summary="Example Big Data Bowl 2025 tracking JSON rows")
+def _example_data(name):
+    _tracking()
+    from gridiron_tracking import bdb
+    return bdb.convert(_example_track(name))
+
+
+@router.get("/examples/{name}/tracking", response_model=PlayDetail,
+            summary="Example in the same Hindsight play JSON as /plays/{id}")
 def example_tracking(name: str):
+    raw = _example_track(name)
+    from gridiron_tracking.video_play import play_json
+    return JSONResponse(play_json(raw))
+
+
+@router.get("/examples/{name}/tracking/rows", response_model=list[BDBTrackingRow],
+            summary="Optional example Big Data Bowl rows")
+def example_rows(name: str):
     return _example_data(name)[0]
 
 
@@ -308,6 +349,7 @@ def make_clip(req: ClipRequest) -> dict:
     spec.track.ball = False
     spec.track.ball_motion = True
     spec.track.carrier = False
+    spec.track.full_roster_frame = req.fullRosterFrame
     spec.bdb = {key: value for key, value in {
         "gameId": req.gameId, "playId": req.playId, "playDirection": req.playDirection,
         "startTime": req.startTime.isoformat() if req.startTime else None,
@@ -484,6 +526,7 @@ def run(name: str) -> dict:
             assets["tracking"] = f"/video/clips/{name}/tracking"
             assets["trackingCsv"] = f"/video/clips/{name}/tracking.csv"
             assets["trackingMetadata"] = f"/video/clips/{name}/tracking/metadata"
+            assets["rawTrack"] = f"/video/clips/{name}/track/raw"
             for source, dest in (("sidebyside.mp4", "reconstruction.mp4"),
                                  ("ball-preview.mp4", "ball-tracking.mp4")):
                 path = RUNS / name / source
@@ -494,7 +537,11 @@ def run(name: str) -> dict:
                             f"/video/clips/{name}/{dest}")
                     else:
                         problems.append("ffmpeg is unavailable; install it for browser-playable previews")
+        readiness = _public_play(name) if res.track is not None and res.track.frames else {}
         return {"clip": name, "problems": problems,
+                "analysisReady":readiness.get("analysisReady",False),
+                "analysisBlockers":readiness.get("analysisBlockers",["no tracking frames"]),
+                "trackingQuality":readiness.get("trackingQuality"),
                 "stages": dict(res.stages), "seconds": round(res.seconds, 1),
                 "hasTrack": res.track is not None, "assets": assets,
                 "teams": res.track.meta.get("teams") if res.track is not None else None,
@@ -514,8 +561,8 @@ def _browser_video(source: Path, dest: Path) -> bool:
     return True
 
 
-@router.get("/clips/{name}/track", summary="The tracking data for a clip")
-def track(name: str):
+@router.get("/clips/{name}/track/raw", summary="Internal sparse tracker output for diagnostics")
+def raw_track(name: str):
     _name(name)
     path = RUNS / name / "track.json"
     if not path.exists():
@@ -524,8 +571,96 @@ def track(name: str):
     return json.loads(path.read_text())
 
 
+def _prepared(name):
+    raw = raw_track(name)
+    _tracking()
+    from gridiron_tracking.contract import PlayTrack
+    from gridiron_tracking.video_play import prepared
+    spec = _load_clip(name) if (SPEC_DIR / f"{name}.json").is_file() else None
+    if spec and spec.track.full_roster_frame is not None:
+        identity = raw.get("meta",{}).get("identity",{})
+        if (identity.get("anchorSourceFrame") != spec.track.full_roster_frame or
+                identity.get("operatorAnchors",[]) != spec.track.identity_anchors):
+            raise HTTPException(409,"identity configuration changed; rerun the clip before consuming its play")
+    try:
+        return prepared(PlayTrack.from_json(raw), spec.bdb if spec else {}, spec.reviewed_pass if spec else {})
+    except (ValueError, KeyError) as e:
+        raise HTTPException(422,str(e)) from e
+
+
+def _public_play(name):
+    out, report = _prepared(name)
+    from gridiron_tracking.video_play import document
+    return document(out,report)
+
+
+@router.get("/clips/{name}/track", response_model=PlayDetail, summary="Hindsight play JSON, same contract as /plays/{id}")
+@router.get("/clips/{name}/tracking", response_model=PlayDetail, summary="Hindsight play JSON, produced by to_play_json")
+def track(name: str):
+    return JSONResponse(_public_play(name))
+
+
+@router.post("/clips/{name}/pass-review", summary="Supply a film-reviewed completed pass and its carriers")
+def pass_review(name: str, req: PassReviewRequest):
+    spec = _load_clip(name)
+    _tracking()
+    from gridiron_tracking.contract import PlayTrack
+    from gridiron_tracking.video_play import play_json
+    try:
+        doc = play_json(PlayTrack.from_json(raw_track(name)),spec.bdb,req.model_dump(exclude_none=True))
+    except (ValueError,KeyError) as e:
+        raise HTTPException(422,str(e)) from e
+    spec.reviewed_pass = req.model_dump(exclude_none=True)
+    spec.save(SPEC_DIR)
+    return JSONResponse(doc)
+
+
+@router.post("/clips/{name}/identities", summary="Anchor a checked full formation and optional identity corrections")
+def identity_review(name: str, req: IdentityReviewRequest):
+    spec = _load_clip(name)
+    for frame in [req.fullRosterFrame]+[a.frame for a in req.anchors]:
+        if frame < spec.start or (spec.stop is not None and frame >= spec.stop):
+            raise HTTPException(422,"identity frames must be inside the clip window")
+    for a in req.anchors:
+        if not re.fullmatch(r"p\d{2}",a.playerId) or int(a.playerId[1:]) >= 2*spec.track.max_team_players:
+            raise HTTPException(422,"anchors must name formation IDs p00..p21")
+        if not all(math.isfinite(v) for v in a.field):
+            raise HTTPException(422,"identity field points must be finite")
+    if len({(a.frame,a.playerId) for a in req.anchors}) != len(req.anchors):
+        raise HTTPException(422,"duplicate frame/player identity anchors")
+    spec.track.full_roster_frame = req.fullRosterFrame
+    spec.track.identity_anchors = [a.model_dump() for a in req.anchors]
+    spec.save(SPEC_DIR)
+    return {"clip":name,"rerunRequired":True,"next":f"POST /video/clips/{name}/run"}
+
+
+@router.post("/clips/{name}/review", summary="Run the play model on validated video tracking")
+def review(name: str):
+    out, report = _prepared(name)
+    if not report.reviewable:
+        raise HTTPException(422,{"analysisReady":False,"analysisBlockers":report.blockers})
+    import sys
+    path = str(REPO_ROOT / "packages" / "counterfactual")
+    if path not in sys.path:
+        sys.path.insert(0,path)
+    from gridiron_counterfactual.review import review_play
+    from gridiron_counterfactual.forecast import continue_play
+    from gridiron_tracking.hindsight import to_play_json
+    try:
+        result = review_play(out)
+    except FileNotFoundError as e:
+        raise HTTPException(503,str(e)) from e
+    except ValueError as e:
+        raise HTTPException(422,str(e)) from e
+    combined = to_play_json(continue_play(out,result.forecast))
+    start = result.forecast.frames[0].t
+    combined["simulationStartFrameId"] = min(i+1 for i,f in enumerate(out.frames) if f.t >= start)
+    return {**result.to_json(),"trackingQuality":out.meta["tracking_quality"],
+            "forecast":combined}
+
+
 def _tracking_rows(name):
-    raw = track(name)
+    raw = raw_track(name)
     _tracking()
     from gridiron_tracking import bdb
     from gridiron_tracking.contract import PlayTrack
@@ -533,7 +668,7 @@ def _tracking_rows(name):
     return bdb.convert(PlayTrack.from_json(raw), options)
 
 
-@router.get("/clips/{name}/tracking", response_model=list[BDBTrackingRow],
+@router.get("/clips/{name}/tracking/rows", response_model=list[BDBTrackingRow],
             summary="Big Data Bowl 2025 tracking JSON rows")
 def tracking_rows(name: str):
     return _tracking_rows(name)[0]

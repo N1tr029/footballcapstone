@@ -109,7 +109,7 @@ def infer_roles(track: PlayTrack, offense: str | None = None) -> dict[str, str]:
     roles: dict[str, str] = {pid: COVERAGE for pid in defensive}
     for pid in offensive:
         position = str(track.roster[pid].role or "")
-        if not known_positions or position in ELIGIBLE:
+        if not known_positions or not position or position in ELIGIBLE:
             roles[pid] = ROUTE
         # Linemen and anyone else get no role. The model maps unknown roles to -1,
         # which is a code it was trained with, and it keeps a tackle out of the

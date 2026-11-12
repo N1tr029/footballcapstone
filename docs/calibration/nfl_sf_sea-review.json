@@ -1,0 +1,127 @@
+{
+  "source": "operator-reviewed from film",
+  "snapFrame": 1672,
+  "fullRosterFrame": 1578,
+  "pass": {
+    "throwFrame": 1769,
+    "catchFrame": 1780,
+    "passerId": "p02",
+    "receiverId": "p07",
+    "centerId": "p18"
+  },
+  "identityAnchors": [
+    {
+      "frame": 1695,
+      "playerId": "p02",
+      "field": [
+        80.3833371317102,
+        29.74270471314707
+      ]
+    },
+    {
+      "frame": 1710,
+      "playerId": "p02",
+      "field": [
+        80.68418324862279,
+        29.779934905847856
+      ]
+    },
+    {
+      "frame": 1730,
+      "playerId": "p02",
+      "field": [
+        82.37543089960566,
+        30.562060094184904
+      ]
+    },
+    {
+      "frame": 1750,
+      "playerId": "p02",
+      "field": [
+        81.92681403312542,
+        31.12772557460981
+      ]
+    },
+    {
+      "frame": 1769,
+      "playerId": "p02",
+      "field": [
+        80.56879258586217,
+        30.955026959635354
+      ]
+    },
+    {
+      "frame": 1695,
+      "playerId": "p07",
+      "field": [
+        80.79499046215001,
+        28.934564615793196
+      ]
+    },
+    {
+      "frame": 1710,
+      "playerId": "p07",
+      "field": [
+        79.1851342729532,
+        30.407949197299384
+      ]
+    },
+    {
+      "frame": 1730,
+      "playerId": "p07",
+      "field": [
+        75.555783025091,
+        31.408849658343442
+      ]
+    },
+    {
+      "frame": 1750,
+      "playerId": "p07",
+      "field": [
+        72.20454448939789,
+        31.258234793387253
+      ]
+    },
+    {
+      "frame": 1769,
+      "playerId": "p07",
+      "field": [
+        70.81466692815063,
+        29.35419236751019
+      ]
+    },
+    {
+      "frame": 1780,
+      "playerId": "p07",
+      "field": [
+        70.49072597050665,
+        29.137254835026866
+      ]
+    },
+    {
+      "frame": 1788,
+      "playerId": "p07",
+      "field": [
+        70.28593058725544,
+        29.154799435666323
+      ]
+    },
+    {
+      "frame": 1800,
+      "playerId": "p07",
+      "field": [
+        69.07813942417648,
+        29.509437570997026
+      ]
+    },
+    {
+      "frame": 1810,
+      "playerId": "p07",
+      "field": [
+        67.72276988194274,
+        31.153479056752854
+      ]
+    }
+  ],
+  "note": "Assisted example: checked calibration, 22-player formation at source 1578, reviewed QB/RB identity corrections, throw/catch approximately 1769/1780 (+/-2 source frames). Ball ground path uses attributed possession/interpolated flight; visible airborne pixel evidence remains separate. Full continuous identity accuracy is not established."
+}

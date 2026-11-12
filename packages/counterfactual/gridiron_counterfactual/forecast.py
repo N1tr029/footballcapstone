@@ -157,6 +157,8 @@ def to_play_track(
             "forecast velocity, as o_source on every sample says."
         ),
     }
+    from gridiron_tracking.hindsight import nfl_ids
+    meta["export_nfl_ids"] = nfl_ids(source)
     if unknown:
         meta["players_not_in_source_roster"] = sorted(unknown)
 

@@ -76,6 +76,7 @@ class PassEvents:
     flight_yards: float = 0.0
     confidence: float = 0.0
     notes: list[str] = dc_field(default_factory=list)
+    source: str = "derived from the ball track, not labelled"
 
     @property
     def found(self) -> bool:
@@ -86,7 +87,7 @@ class PassEvents:
             "thrown_at": self.thrown_at, "arrived_at": self.arrived_at,
             "flight_yards": round(self.flight_yards, 2),
             "confidence": self.confidence, "notes": list(self.notes),
-            "source": "derived from the ball track, not labelled",
+            "source": self.source,
         }
 
 
@@ -185,7 +186,16 @@ def apply(track: PlayTrack) -> PassEvents:
     Named after the tracking vocabulary the contract already uses, so a derived
     play and a labelled release play are read by exactly the same code downstream.
     """
-    found = derive(track)
+    thrown, arrived = track.event_time("pass_forward"), track.event_time("pass_arrived")
+    if thrown is not None and arrived is not None and arrived > thrown:
+        # Existing labelled events are stronger evidence than a new inference.
+        found = PassEvents(thrown_at=thrown, arrived_at=arrived,
+            source="operator-reviewed from film" if track.meta.get("reviewed_pass") else "existing labelled events")
+        a,b = track.frame_at(thrown).ball,track.frame_at(arrived).ball
+        if a and b:
+            found.flight_yards = math.hypot(b.x-a.x,b.y-a.y)
+    else:
+        found = derive(track)
     if not found.found:
         track.meta["pass_events"] = found.to_json()
         return found

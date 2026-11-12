@@ -160,6 +160,9 @@ class TrackSpec:
     upper bounds only; seeing 22 person boxes alone does not prove a full formation.
     """
 
+    identity_anchors: list[dict[str, Any]] = dc_field(default_factory=list)
+    """Optional reviewed playerId/frame/field points for identity reacquisition."""
+
     team_cost: float = 0.0
     """Yards of penalty for matching a detection to a track of the other team. Needs
     ``pre_teams``; without a team on the detections there is nothing to disagree with."""
@@ -264,6 +267,8 @@ class ClipSpec:
     notes: str = ""
     bdb: dict[str, Any] = dc_field(default_factory=dict)
     """Optional Big Data Bowl export metadata: IDs, club labels, direction and startTime."""
+    reviewed_pass: dict[str, Any] = dc_field(default_factory=dict)
+    """Optional explicit film-reviewed pass/carrier annotation; never a detection."""
     detect: DetectSpec = dc_field(default_factory=DetectSpec)
     register: RegisterSpec = dc_field(default_factory=RegisterSpec)
     track: TrackSpec = dc_field(default_factory=TrackSpec)

@@ -107,6 +107,10 @@ def last_state(track: PlayTrack, at: float | None = None) -> pd.DataFrame:
         if not series:
             continue
         t, p = series[-1]
+        if at is not None and track.meta.get("source") == "vision" and at-t > .25:
+            # A last sighting seconds ago is not a current pose for an off-camera
+            # athlete. Forecast the observed subset and report the missing roster.
+            continue
         x, y = to_ngs_space(p.x, p.y, flip)
         role = roles.get(pid)
         rows.append({

@@ -33,9 +33,10 @@ pytest` at the root runs the tracking, model and API regression suites.
 
 **Video analysis API:** start it from the repository root with
 `uvicorn api.main:app --app-dir apps/api`. Open `/docs` for OpenAPI or `/video` for
-endpoint discovery. Public exports use the **Big Data Bowl 2025 tracking columns**;
+endpoint discovery. Public JSON uses **Hindsight schemaVersion 1** via `to_play_json`;
 `/video/examples/nfl_sf_sea/tracking.csv` and `/video/examples/nfl_sf_sea/tracking`
-serve a checked example without running models. See the
+serve CSV and an assisted replay example without running models. Video `/review`
+runs the play model after checking ball/events and identity readiness. See the
 [API setup and frontend guide](docs/video-analysis-api.md).
 
 | stream | state |

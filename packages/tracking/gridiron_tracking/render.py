@@ -936,13 +936,20 @@ def render(spec: ClipSpec, root: Path = RUN_DIR, force=(), log=print) -> RenderR
         team_cost=spec.track.team_cost,
     )
     out = run_pipeline(_Seq(), _ByWindowIndex(src_reg, ordered), len(ordered), cfg)
-    if spec.track.stitch:
+    fixed_roster = spec.track.full_roster_frame is not None
+    if fixed_roster:
+        from .identity import from_video
+        out.track = from_video(frames, boxes, src_reg, spec.track.full_roster_frame,
+                               fps, spec.snap_frame if spec.snap_frame is not None else ordered[0],
+                               spec.track.max_team_players, spec.track.identity_anchors)
+        log(f"    fixed identities: {len(out.track.roster)} anchored athletes; no new IDs after the formation")
+    if spec.track.stitch and not fixed_roster:
         from .stitch import stitch as _stitch
         rep = _stitch(out.track, max_gap_s=spec.track.stitch_gap_s,
                       gate_yards=spec.track.stitch_gate)
         if rep.merged:
             log(f"    {rep.summary()}")
-    if spec.track.drop_static_sideline:
+    if spec.track.drop_static_sideline and not fixed_roster:
         n = _drop_furniture(out.track, field_spec, spec.track.static_yards,
                             spec.track.sideline_band)
         if n:
@@ -951,6 +958,8 @@ def render(spec: ClipSpec, root: Path = RUN_DIR, force=(), log=print) -> RenderR
     out.track.meta.setdefault("play_id", spec.name)
     if spec.bdb:
         out.track.meta["bdb"] = dict(spec.bdb)
+    if fixed_roster:
+        out.track.meta["teams"] = {"method": "fixed formation identities", "max_players_per_team": spec.track.max_team_players}
     out.track.meta["clip"] = {
         "name": spec.name, "video": spec.video, "start_frame": spec.start,
         "stop_frame": spec.stop, "snap_source_frame": spec.snap_frame,
@@ -970,7 +979,7 @@ def render(spec: ClipSpec, root: Path = RUN_DIR, force=(), log=print) -> RenderR
     rects = {k: [(d.x1, d.y1, d.x2, d.y2) for d in v] for k, v in boxes.items()}
     timed = _ByTime(src_reg, fps, offset)
 
-    if spec.track.teams:
+    if spec.track.teams and not fixed_roster:
         res.team_separation = _teams(spec, out.track, frames, rects, src_reg, fps, offset, log)
 
     res.report = verifymod.verify(out.track, timed, rects, fps=fps, frame_offset=offset)
@@ -999,6 +1008,11 @@ def render(spec: ClipSpec, root: Path = RUN_DIR, force=(), log=print) -> RenderR
             res.problems.append(f"ball tracking failed: {type(e).__name__}: {e}")
         if res.ball is not None:
             _merge_ball(out.track, res.ball, log)
+
+    if spec.reviewed_pass:
+        from .video_play import apply_review
+        apply_review(out.track, spec.reviewed_pass)
+        log(f"    assisted ball ground path: {out.track.meta['ball']['by_source']}; throw/catch reviewed from film")
 
     res.video = verifymod.side_by_side(
         out_dir / "sidebyside.mp4", out.track, timed, frames, rects, field_spec,
@@ -1037,12 +1051,15 @@ def render(spec: ClipSpec, root: Path = RUN_DIR, force=(), log=print) -> RenderR
         res.problems, res.stages.get("register"))
     if paint_audit:
         out.track.meta["registration"]["paint_alignment_samples"] = paint_audit
+    out.track.meta["verification"] = {"agreement": res.report.agreement} if hasattr(res.report, "agreement") else {}
     (out_dir / "track.json").write_text(json.dumps(out.track.to_json()))
     from . import bdb
     bdb.write_play(out_dir, out.track)
     report_txt = res.report.table()
     if res.markers is not None and res.markers.samples:
         report_txt += "\n\n" + res.markers.table()
+    if spec.reviewed_pass:
+        report_txt += "\n\nAssisted ball ground path (not detections): " + str(out.track.meta["ball"]["by_source"])
     (out_dir / "report.txt").write_text(report_txt + "\n")
     (out_dir / "spec.json").write_text(json.dumps(spec.to_json(), indent=2) + "\n")
     res.seconds = time.time() - t0

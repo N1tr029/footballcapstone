@@ -41,7 +41,7 @@ def client(tmp_path, monkeypatch):
 
 
 def _clip(client, source_video):
-    uploaded = client.post("/video/uploads", files={"file": ("play.mp4", source_video.read_bytes(), "video/mp4")})
+    uploaded = client.post("/video/uploads", files={"file": ("play.mp4", source_video.read_bytes(), "video/mp4")},data={"autoAnalyze":"false"})
     assert uploaded.status_code == 200
     request = {"videoId": uploaded.json()["videoId"], "name": "play", "startFrame": 0,
                "stopFrame": 12, "snapFrame": 0, "level": "college"}
@@ -69,6 +69,7 @@ def test_upload_metadata_source_and_motion_tracking_defaults(client, source_vide
     spec = ClipSpec.load("play", video.SPEC_DIR)
     assert spec.track.ball_motion and spec.track.pre_teams
     assert not spec.track.ball and not spec.track.carrier
+    assert spec.track.identity_mode=="sam2"
     assert client.get("/video/clips").json()["clips"][0]["hasTrack"] is False
 
 
@@ -258,7 +259,7 @@ def test_bdb_example_is_available_without_local_runs_or_models(client):
 
 
 def test_bdb_metadata_can_be_supplied_at_clip_creation(client, source_video):
-    uploaded = client.post("/video/uploads", files={"file": ("play.mp4", source_video.read_bytes())}).json()
+    uploaded = client.post("/video/uploads", files={"file": ("play.mp4", source_video.read_bytes())}, data={"autoAnalyze":"false"}).json()
     response = client.post("/video/clips", json={"videoId": uploaded["videoId"], "name": "labeled",
         "startFrame": 0, "stopFrame": 12, "gameId": 2022091200, "playId": 64,
         "playDirection": "right", "teamAClub": "DEN", "teamBClub": "SEA"})
@@ -330,6 +331,61 @@ def test_identity_update_requires_rerun_before_serving_stale_results(client):
     assert response.status_code == 200 and response.json()["rerunRequired"]
     response = client.get("/video/clips/checked/tracking")
     assert response.status_code == 409 and "rerun" in response.json()["detail"]
+
+
+def test_upload_defaults_to_a_pollable_automatic_job(client,source_video,monkeypatch):
+    seen=[]
+    def analyze(vid):
+        seen.append(vid)
+        video._progress("tracking","Tracking players")
+        return {"videoId":vid,"plays":[],"analysisReady":False}
+    monkeypatch.setattr(video,"_analyze_video",analyze)
+    response=client.post("/video/uploads",files={"file":("play.mp4",source_video.read_bytes(),"video/mp4")})
+    assert response.status_code==200
+    body=response.json();job=_finished(client,body["analysisJobId"])
+    assert job["state"]=="done" and seen==[body["videoId"]]
+    assert job["progress"]["stage"]=="tracking"
+
+
+def test_automatic_upload_workflow_does_not_load_manual_annotations(client,source_video,monkeypatch):
+    _,uploaded=_clip(client,source_video)
+    from gridiron_tracking import shots
+    shot=SimpleNamespace(start_frame=0,end_frame=11,fps=30,seconds=.4,playlike=lambda:.9)
+    monkeypatch.setattr(shots,"segment",lambda path:[shot])
+    seen=[]
+    def render(name):
+        spec=ClipSpec.load(name,video.SPEC_DIR);seen.append(spec)
+        return {"clip":name,"hasTrack":True,"analysisReady":True,"assets":{"tracking":f"/video/clips/{name}/tracking"}}
+    monkeypatch.setattr(video,"_render_clip",render)
+    response=client.post(f"/video/{uploaded['videoId']}/analyze")
+    job=_finished(client,response.json()["jobId"])
+    assert job["state"]=="done" and job["result"]["analysisReady"]
+    spec=seen[0]
+    assert spec.register.mode=="auto" and spec.register.homography is None
+    assert spec.snap_frame is None and spec.track.full_roster_frame is None
+    assert not spec.track.identity_anchors and not spec.reviewed_pass
+    assert spec.track.identity_mode=="sam2" and spec.track.backward_check and spec.track.jersey_numbers
+
+
+def test_no_field_shot_is_a_visible_automatic_failure(client,source_video,monkeypatch):
+    _,uploaded=_clip(client,source_video)
+    from gridiron_tracking import shots
+    monkeypatch.setattr(shots,"segment",lambda path:[])
+    job=_finished(client,client.post(f"/video/{uploaded['videoId']}/analyze").json()["jobId"])
+    assert job["state"]=="failed" and "no playable field shot" in job["error"]
+
+
+def test_automatic_example_is_replay_ready_with_explicit_unknown_jerseys(client):
+    response=client.get("/video/examples/nfl_sf_sea_auto/tracking")
+    assert response.status_code==200
+    doc=response.json()
+    assert doc["schemaVersion"]==1 and doc["analysisReady"]
+    assert len(doc["players"])==22 and doc["trackingQuality"]["identityAutomatic"]
+    assert not doc["trackingQuality"]["assisted"]
+    assert all(not p["jerseyNumberKnown"] for p in doc["players"])
+    assert doc["provenance"]["automaticPass"]["outcome"]=="unknown"
+    assert not doc["provenance"]["reviewedPass"]
+    assert not any("pass_outcome_caught" in f.get("events",[]) for f in doc["frames"])
 
 
 @pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg optional outside the video server")

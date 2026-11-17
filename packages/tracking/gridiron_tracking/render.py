@@ -186,7 +186,7 @@ def _register(spec: ClipSpec, frames: dict[int, np.ndarray], n_src: int,
     from .registration.homography import Homography
     from .registration import vision
 
-    base, field_spec, stage, problems = _anchor(spec, frames, n_src, out_dir, force, log)
+    base, field_spec, stage, problems = _anchor(spec, frames, n_src, out_dir, force, log,boxes=boxes)
     if base is None or not spec.register.propagate:
         return base, field_spec, stage, problems, None
 
@@ -232,7 +232,7 @@ def _scan_frames(spec: ClipSpec, frames, n_src: int) -> list[int]:
     return out[: spec.register.scan_frames + 1]
 
 
-def _anchor(spec: ClipSpec, frames, n_src: int, out_dir: Path, force: set, log):
+def _anchor(spec: ClipSpec, frames, n_src: int, out_dir: Path, force: set, log,boxes=None):
     """The one frame whose field position is established, and how."""
     from .registration.homography import Homography
     from .registration import vision
@@ -248,6 +248,8 @@ def _anchor(spec: ClipSpec, frames, n_src: int, out_dir: Path, force: set, log):
         d = json.loads(cache.read_text())
         H = Homography(np.array(d["H"], dtype=float))
         sp = vision.spec_for(d.get("level", "unclear"))
+        if d.get("frame") is not None:
+            spec.register.frame=int(d["frame"])
         log(f"    anchor: cached ({sp.name}, frame {d.get('frame')})")
         return H, sp, "cached", list(d.get("problems", []))
 
@@ -264,6 +266,7 @@ def _anchor(spec: ClipSpec, frames, n_src: int, out_dir: Path, force: set, log):
     wanted = spec.register.candidate_frames or _scan_frames(spec, frames, n_src)
     tried: list[str] = []
     best = None
+    tried_paint=False
     for fi in wanted:
         img = frames.get(fi)
         if img is None:
@@ -274,6 +277,16 @@ def _anchor(spec: ClipSpec, frames, n_src: int, out_dir: Path, force: set, log):
         log(f"    anchor: reading frame {fi} with the vision model...")
         kw = {"model": spec.register.model} if spec.register.model else {}
         auto = vision.auto_register(img, verify=False, **kw)
+        if spec.track.identity_mode=="sam2" and not tried_paint and (
+                auto.homography is None or not np.isfinite(auto.paint) or auto.paint<spec.register.min_paint):
+            tried_paint=True
+            from .registration.paint_auto import calibrate
+            source=VideoSource(spec.video);fps=spec.fps or source.info.fps;source.close()
+            rects={f:[[d.x1,d.y1,d.x2,d.y2] for d in ds] for f,ds in (boxes or {}).items()}
+            hint=spec.register.level or (getattr(auto.reading,"level",None) if auto.reading else None)
+            fallback=calibrate(frames,rects,fps=fps,cache_dir=out_dir/"paint-ocr",level=hint,log=log)
+            if fallback:
+                auto=fallback;fi=fallback.frame
         log(f"      {auto.summary()}")
         if auto.homography is None:
             tried.append(f"frame {fi}: {auto.summary()}")
@@ -293,11 +306,13 @@ def _anchor(spec: ClipSpec, frames, n_src: int, out_dir: Path, force: set, log):
         return None, fieldmod.NFL, "failed", tried
 
     score, auto, fi = best
+    spec.register.frame=fi
     cache.parent.mkdir(parents=True, exist_ok=True)
     cache.write_text(json.dumps({
         "H": auto.homography.H.tolist(), "level": auto.reading.level,
         "frame": fi, "paint": score, "problems": auto.problems,
         "correspondences": len(auto.correspondences),
+        "automaticEvidence":getattr(auto,"evidence",None),
     }))
     log(f"    anchor: fitted on frame {fi} — {auto.summary()}")
     return auto.homography, auto.spec, "computed", list(auto.problems)
@@ -676,7 +691,11 @@ def _carrier(spec: ClipSpec, track: PlayTrack, log):
     """
     if not spec.track.carrier:
         return {}
-    model = carriermod.load(spec.track.carrier_weights)
+    try:
+        model = carriermod.load(spec.track.carrier_weights)
+    except ImportError:
+        log("    optional carrier classifier unavailable; continuing with visible-ball evidence")
+        return {}
     if model is None:
         log(f"    no carrier model at {spec.track.carrier_weights} "
             f"— the ball will come from the detector alone")
@@ -723,6 +742,9 @@ def _ball(spec: ClipSpec, track: PlayTrack, frames, reg, fps, offset: int, log,
                 if point:
                     x, y = point["field"]
                     bt.samples.append(ballmod.BallSample(f.t, x, y, "detected", point["confidence"]))
+                elif f.t in carrier_xy and not min(observations)<=src<=max(observations):
+                    x,y=carrier_xy[f.t]
+                    bt.samples.append(ballmod.BallSample(f.t,x,y,"carrier"))
                 else:
                     bt.samples.append(ballmod.BallSample(f.t, float("nan"), float("nan"), "none"))
             log(f"    {bt.summary()}")
@@ -911,6 +933,17 @@ def render(spec: ClipSpec, root: Path = RUN_DIR, force=(), log=print) -> RenderR
     if spec.track.pre_teams:
         _label_kits(spec, frames, boxes, log)
 
+    automatic_identity = spec.track.identity_mode == "sam2" and spec.track.full_roster_frame is None
+    snap_estimate = None
+    if automatic_identity and spec.snap_frame is None:
+        from .automatic import field_points,snap_from_positions
+        snap_estimate = snap_from_positions(field_points(boxes,src_reg),fps)
+        if snap_estimate.frame is not None:
+            spec.snap_frame = snap_estimate.frame
+            log(f"    automatic snap: source {spec.snap_frame} ({snap_estimate.confidence:.0%} confidence)")
+        else:
+            log(f"    automatic snap: unknown — {snap_estimate.reason}")
+
     by_index = {i: boxes.get(f, []) for i, f in enumerate(ordered)}
 
     class _Seq:
@@ -936,8 +969,21 @@ def render(spec: ClipSpec, root: Path = RUN_DIR, force=(), log=print) -> RenderR
         team_cost=spec.track.team_cost,
     )
     out = run_pipeline(_Seq(), _ByWindowIndex(src_reg, ordered), len(ordered), cfg)
-    fixed_roster = spec.track.full_roster_frame is not None
-    if fixed_roster:
+    fixed_roster = spec.track.full_roster_frame is not None or automatic_identity
+    if automatic_identity:
+        from .auto_identity import track as automatic_track
+        out.track = automatic_track(frames,boxes,src_reg,fps=fps,
+            snap=spec.snap_frame if spec.snap_frame is not None else ordered[0],
+            weights=spec.track.identity_weights,cache_dir=out_dir/"identity-cache",
+            capacity=spec.track.max_team_players,backward=spec.track.backward_check,
+            jerseys=spec.track.jersey_numbers,log=log)
+        out.tracks_born=out.tracks_kept=len(out.track.roster)
+        if spec.snap_frame is None:
+            for f in out.track.frames:
+                f.events=[e for e in f.events if e!="ball_snap"]
+        if snap_estimate:
+            out.track.meta["snap_estimate"] = vars(snap_estimate)
+    elif fixed_roster:
         from .identity import from_video
         out.track = from_video(frames, boxes, src_reg, spec.track.full_roster_frame,
                                fps, spec.snap_frame if spec.snap_frame is not None else ordered[0],
@@ -959,7 +1005,7 @@ def render(spec: ClipSpec, root: Path = RUN_DIR, force=(), log=print) -> RenderR
     if spec.bdb:
         out.track.meta["bdb"] = dict(spec.bdb)
     if fixed_roster:
-        out.track.meta["teams"] = {"method": "fixed formation identities", "max_players_per_team": spec.track.max_team_players}
+        out.track.meta["teams"] = {"method": "automatic SAM formation identities" if automatic_identity else "fixed formation identities", "max_players_per_team": spec.track.max_team_players}
     out.track.meta["clip"] = {
         "name": spec.name, "video": spec.video, "start_frame": spec.start,
         "stop_frame": spec.stop, "snap_source_frame": spec.snap_frame,
@@ -1000,6 +1046,11 @@ def render(spec: ClipSpec, root: Path = RUN_DIR, force=(), log=print) -> RenderR
             out.track.meta["broadcast"] = res.markers.situation()
             log(f"    situation: line of scrimmage x={res.markers.line_of_scrimmage:.1f}, "
                 f"offense attacks {res.markers.attacks}")
+    elif automatic_identity:
+        from .broadcast import infer_situation
+        situation=infer_situation(frames,src_reg)
+        if situation:
+            out.track.meta["broadcast"]=situation
 
     if spec.track.ball or spec.track.ball_motion or spec.track.carrier:
         try:
@@ -1009,7 +1060,18 @@ def render(spec: ClipSpec, root: Path = RUN_DIR, force=(), log=print) -> RenderR
         if res.ball is not None:
             _merge_ball(out.track, res.ball, log)
 
-    if spec.reviewed_pass:
+    if automatic_identity and res.ball is not None:
+        from .auto_pass import infer,apply
+        hypothesis,reason = infer(out.track,res.ball.image_observations,src_reg,fps,offset)
+        if hypothesis:
+            accepted,reason=apply(out.track,hypothesis)
+            if accepted:
+                log(f"    automatic pass: throw {hypothesis['throwFrame']}, arrival {hypothesis['catchFrame']}, confidence {hypothesis['confidence']:.0%}")
+        if reason:
+            out.track.meta["automatic_pass_problem"]=reason
+            log(f"    automatic pass: {reason}")
+
+    if spec.reviewed_pass and not automatic_identity:
         from .video_play import apply_review
         apply_review(out.track, spec.reviewed_pass)
         log(f"    assisted ball ground path: {out.track.meta['ball']['by_source']}; throw/catch reviewed from film")
@@ -1060,6 +1122,8 @@ def render(spec: ClipSpec, root: Path = RUN_DIR, force=(), log=print) -> RenderR
         report_txt += "\n\n" + res.markers.table()
     if spec.reviewed_pass:
         report_txt += "\n\nAssisted ball ground path (not detections): " + str(out.track.meta["ball"]["by_source"])
+    if out.track.meta.get("automatic_pass"):
+        report_txt += "\n\nAutomatic ball ground path (not detections): " + str(out.track.meta["ball"]["by_source"])
     (out_dir / "report.txt").write_text(report_txt + "\n")
     (out_dir / "spec.json").write_text(json.dumps(spec.to_json(), indent=2) + "\n")
     res.seconds = time.time() - t0

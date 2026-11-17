@@ -9,9 +9,11 @@ reviews, and runs uploaded footage through the tracking pipeline:
 - **Model reviews**: `packages/counterfactual/reports/decisions.jsonl`, converted
   to the roles.md `Recommendation` shape by
   `gridiron_counterfactual.recommendation.from_report`.
-- **Video analysis**: `/video` uploads, candidate plays, field calibration,
-  analysis jobs, Hindsight replay JSON, optional Big Data Bowl CSV/rows,
-  reviewed pass/carrier annotations, model inference and browser replay/ball previews.
+- **Video analysis**: `/video/uploads` starts automatic analysis by default:
+  field calibration, detector-seeded SAM 2 identities, backward crossing checks,
+  ball/pass inference and optional jersey OCR. Poll `analysisJobId`, then consume
+  Hindsight replay JSON or model inference. Optional assisted routes, Big Data
+  Bowl CSV/rows and browser replay/ball previews remain available.
   The [frontend integration guide](../../docs/video-analysis-api.md) includes the
   request sequence, JSON shape, setup and a checked example for developing the UI.
 
@@ -32,6 +34,7 @@ video routes. `GET /video/examples/nfl_sf_sea/tracking.csv` and
 `GET /video/examples/nfl_sf_sea/tracking` return CSV and Hindsight play JSON on a fresh
 checkout, without downloading models. Video code currently lives on `carrier-ball`;
 it must be merged before a checkout of `main` will expose these routes.
+`GET /video/examples/nfl_sf_sea_auto/tracking` serves the separate automatic example.
 
 ## Point Hindsight at it
 

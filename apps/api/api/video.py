@@ -1,7 +1,7 @@
 """Upload, select a play, calibrate the field, and consume tracking over HTTP.
 
-Scans and renders return job tickets. Automatic registration may need clicked
-field points; a failed fit is returned with its reasons. Tracking metadata keeps
+Uploads start automatic analysis and return job tickets. Unsupported footage
+returns its analysis blockers; optional assisted routes remain available. Metadata keeps
 actual ball sightings separate from estimates and missing observations.
 """
 from __future__ import annotations
@@ -19,7 +19,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal, Optional
 
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, Response, JSONResponse
 from pydantic import BaseModel, Field, model_validator
 
@@ -38,6 +38,7 @@ EXAMPLES = REPO_ROOT / "docs" / "examples"
 _pool = ThreadPoolExecutor(max_workers=1)
 _jobs: dict[str, dict[str, Any]] = {}
 _lock = threading.Lock()
+_current_job = threading.local()
 
 
 def _tracking():
@@ -64,6 +65,7 @@ def _job(kind: str, fn) -> str:
                       "started": time.time(), "result": None, "error": None}
 
     def run():
+        _current_job.id = jid
         try:
             out = fn()
             with _lock:
@@ -72,9 +74,18 @@ def _job(kind: str, fn) -> str:
             with _lock:
                 _jobs[jid].update(state="failed", error=f"{type(e).__name__}: {e}",
                                   finished=time.time())
+        finally:
+            _current_job.id = None
 
     _pool.submit(run)
     return jid
+
+
+def _progress(stage,message):
+    jid=getattr(_current_job,"id",None)
+    if jid:
+        with _lock:
+            _jobs[jid]["progress"]={"stage":stage,"message":message}
 
 
 # ------------------------------------------------------------------- models
@@ -247,7 +258,7 @@ def example_metadata(name: str):
 # ------------------------------------------------------------------ uploads
 
 @router.post("/uploads", summary="Upload footage")
-def upload(file: UploadFile = File(...)) -> dict:
+def upload(file: UploadFile = File(...), autoAnalyze: bool = Form(True)) -> dict:
     import cv2
 
     UPLOADS.mkdir(parents=True, exist_ok=True)
@@ -267,12 +278,15 @@ def upload(file: UploadFile = File(...)) -> dict:
         height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     finally:
         cap.release()
-    return {"videoId": vid, "filename": file.filename,
+    result = {"videoId": vid, "filename": file.filename,
             "bytes": dest.stat().st_size, "path": str(dest.relative_to(REPO_ROOT)),
             "sourceUrl": f"/video/uploads/{vid}/source",
             "media": {"fps": _finite(fps), "frameCount": count,
                       "width": width, "height": height,
                       "seconds": _finite(count / fps) if fps > 0 else None}}
+    if autoAnalyze:
+        result["analysisJobId"]=_job("analyze",lambda:_analyze_video(vid))
+    return result
 
 
 @router.get("/uploads", summary="Footage already uploaded")
@@ -294,6 +308,49 @@ def _video_path(video_id: str) -> Path:
 @router.get("/uploads/{video_id}/source", summary="Play the uploaded source footage")
 def source(video_id: str):
     return FileResponse(_video_path(video_id))
+
+
+@router.post("/{video_id}/analyze",summary="Automatically select plays, calibrate, track identities, ball and events")
+def analyze(video_id: str):
+    _video_path(video_id)
+    return {"videoId":video_id,"jobId":_job("analyze",lambda:_analyze_video(video_id))}
+
+
+def _analyze_video(video_id):
+    _tracking()
+    from gridiron_tracking import shots
+    from gridiron_tracking.clips import ClipSpec
+    path=_video_path(video_id)
+    _progress("scan","Finding field shots")
+    candidates=[s for s in shots.segment(str(path)) if s.playlike()>=.45]
+    if not candidates:
+        raise ValueError("no playable field shot found automatically")
+    candidates=sorted(candidates,key=lambda s:s.playlike(),reverse=True)[:10]
+    candidates.sort(key=lambda s:s.start_frame)
+    plays=[]
+    for i,shot in enumerate(candidates):
+        name=f"upload_{video_id}_{i+1:02d}"
+        start,stop=shots.play_window(path,shot)
+        spec=ClipSpec(name=name,video=str(path.relative_to(REPO_ROOT)),
+            start=start,stop=stop,
+            title=f"Uploaded play {i+1}")
+        spec.register.mode="auto"
+        spec.track.identity_mode="sam2"
+        spec.track.pre_teams=True;spec.track.team_cost=.8
+        spec.track.ball=False;spec.track.ball_motion=True;spec.track.carrier=True
+        spec.track.carrier_weights="packages/tracking/models/carrier.joblib"
+        # No snap, inspected formation, identity correction or pass label is read
+        # from an earlier assisted clip. Every inference starts from this footage.
+        spec.save(SPEC_DIR)
+        _progress("tracking",f"Analyzing play {i+1} of {len(candidates)}")
+        try:
+            plays.append(_render_clip(name))
+        except Exception as e:
+            plays.append({"clip":name,"hasTrack":False,"analysisReady":False,
+                "problems":[f"{type(e).__name__}: {e}"]})
+    _progress("done","Automatic analysis completed")
+    return {"videoId":video_id,"plays":plays,
+        "analysisReady":any(p.get("analysisReady") for p in plays)}
 
 
 # --------------------------------------------------------------------- scan
@@ -350,6 +407,7 @@ def make_clip(req: ClipRequest) -> dict:
     spec.track.ball_motion = True
     spec.track.carrier = False
     spec.track.full_roster_frame = req.fullRosterFrame
+    spec.track.identity_mode = "sam2" if req.fullRosterFrame is None else "legacy"
     spec.bdb = {key: value for key, value in {
         "gameId": req.gameId, "playId": req.playId, "playDirection": req.playDirection,
         "startTime": req.startTime.isoformat() if req.startTime else None,
@@ -508,46 +566,59 @@ def pin(name: str, req: PinRequest) -> dict:
 def run(name: str) -> dict:
     _tracking()
     _load_clip(name)
+    return {"jobId": _job("run", lambda: _render_clip(name)), "clip": name}
 
-    def work():
-        from gridiron_tracking import render as rendermod
-        spec = _load_clip(name)
-        spec.video = str(_source_path(spec))
-        for obj, key in ((spec.detect, "weights"), (spec.track, "ball_weights"),
-                         (spec.track, "carrier_weights")):
-            value = getattr(obj, key)
-            if value and not Path(value).is_absolute() and (REPO_ROOT / value).exists():
-                setattr(obj, key, str(REPO_ROOT / value))
-        res = rendermod.render(spec, root=RUNS, log=lambda *a, **k: None)
-        assets = {}
-        problems = list(res.problems)
-        if res.track is not None:
-            assets["track"] = f"/video/clips/{name}/track"
-            assets["tracking"] = f"/video/clips/{name}/tracking"
-            assets["trackingCsv"] = f"/video/clips/{name}/tracking.csv"
-            assets["trackingMetadata"] = f"/video/clips/{name}/tracking/metadata"
-            assets["rawTrack"] = f"/video/clips/{name}/track/raw"
-            for source, dest in (("sidebyside.mp4", "reconstruction.mp4"),
-                                 ("ball-preview.mp4", "ball-tracking.mp4")):
-                path = RUNS / name / source
-                if path.exists() and (source != "ball-preview.mp4" or
-                                      res.track.meta.get("ball", {}).get("image_observations")):
-                    if _browser_video(path, path.with_name(dest)):
-                        assets["reconstruction" if dest == "reconstruction.mp4" else "ballPreview"] = (
-                            f"/video/clips/{name}/{dest}")
-                    else:
-                        problems.append("ffmpeg is unavailable; install it for browser-playable previews")
-        readiness = _public_play(name) if res.track is not None and res.track.frames else {}
-        return {"clip": name, "problems": problems,
-                "analysisReady":readiness.get("analysisReady",False),
-                "analysisBlockers":readiness.get("analysisBlockers",["no tracking frames"]),
-                "trackingQuality":readiness.get("trackingQuality"),
-                "stages": dict(res.stages), "seconds": round(res.seconds, 1),
-                "hasTrack": res.track is not None, "assets": assets,
-                "teams": res.track.meta.get("teams") if res.track is not None else None,
-                "ball": res.track.meta.get("ball") if res.track is not None else None}
 
-    return {"jobId": _job("run", work), "clip": name}
+def _render_clip(name):
+    from gridiron_tracking import render as rendermod
+    spec = _load_clip(name)
+    spec.video = str(_source_path(spec))
+    for obj, key in ((spec.detect, "weights"), (spec.track, "ball_weights"),
+                     (spec.track, "carrier_weights"),(spec.track,"identity_weights")):
+        value = getattr(obj, key)
+        if value and not Path(value).is_absolute() and (REPO_ROOT / value).exists():
+            setattr(obj, key, str(REPO_ROOT / value))
+        elif key=="identity_weights" and value and not Path(value).is_absolute():
+            setattr(obj,key,str(REPO_ROOT/value))
+    def progress(*args,**kwargs):
+        message=" ".join(str(a) for a in args).strip()
+        if "SAM" in message:
+            _progress("tracking",message)
+        elif "anchor:" in message or "paint calibration:" in message:
+            _progress("calibration","Finding the field geometry")
+        elif "jerseys:" in message:
+            _progress("jerseys",message)
+        elif "automatic pass:" in message:
+            _progress("ball",message)
+    res = rendermod.render(spec, root=RUNS, log=progress)
+    assets = {}
+    problems = list(res.problems)
+    if res.track is not None:
+        assets["track"] = f"/video/clips/{name}/track"
+        assets["tracking"] = f"/video/clips/{name}/tracking"
+        assets["trackingCsv"] = f"/video/clips/{name}/tracking.csv"
+        assets["trackingMetadata"] = f"/video/clips/{name}/tracking/metadata"
+        assets["rawTrack"] = f"/video/clips/{name}/track/raw"
+        for source, dest in (("sidebyside.mp4", "reconstruction.mp4"),
+                             ("ball-preview.mp4", "ball-tracking.mp4")):
+            path = RUNS / name / source
+            if path.exists() and (source != "ball-preview.mp4" or
+                                  res.track.meta.get("ball", {}).get("image_observations")):
+                if _browser_video(path, path.with_name(dest)):
+                    assets["reconstruction" if dest == "reconstruction.mp4" else "ballPreview"] = (
+                        f"/video/clips/{name}/{dest}")
+                else:
+                    problems.append("ffmpeg is unavailable; install it for browser-playable previews")
+    readiness = _public_play(name) if res.track is not None and res.track.frames else {}
+    return {"clip": name, "problems": problems,
+            "analysisReady":readiness.get("analysisReady",False),
+            "analysisBlockers":readiness.get("analysisBlockers",["no tracking frames"]),
+            "trackingQuality":readiness.get("trackingQuality"),
+            "stages": dict(res.stages), "seconds": round(res.seconds, 1),
+            "hasTrack": res.track is not None, "assets": assets,
+            "teams": res.track.meta.get("teams") if res.track is not None else None,
+            "ball": res.track.meta.get("ball") if res.track is not None else None}
+
 
 
 def _browser_video(source: Path, dest: Path) -> bool:

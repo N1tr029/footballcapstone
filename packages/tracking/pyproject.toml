@@ -11,7 +11,7 @@ dependencies = ["numpy>=1.26", "scipy>=1.11", "pandas>=2.1", "pyarrow>=14", "pyd
 # tested before a single frame of video has been downloaded.
 [project.optional-dependencies]
 video = ["opencv-python>=4.9"]
-detect = ["ultralytics>=8.1"]
+detect = ["ultralytics>=8.4.166,<8.5"]
 # Reading the field with a vision model, so registration stops being manual.
 vision = ["anthropic>=1.0", "opencv-python>=4.9"]
 # Benchmarking a video model against known tracking.
@@ -29,3 +29,6 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 include = ["gridiron_tracking*"]
+
+[tool.setuptools.package-data]
+gridiron_tracking = ["ocr/*.swift"]

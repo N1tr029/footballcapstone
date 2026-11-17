@@ -105,6 +105,9 @@ def prepared(raw: PlayTrack, options: dict | None = None, annotation: dict | Non
     if config.get("playDirection"):
         out.meta.setdefault("play_direction", config["playDirection"])
     out, report = prepare(out, offense=out.meta.get("possessionTeam"))
+    if out.meta.get("automatic_pass") and report.sides:
+        report.sides.method="automatic flight endpoint team"
+        report.sides.confidence=out.meta["automatic_pass"].get("confidence",0.)
     if len(raw.roster) > 22 and raw.meta.get("identity",{}).get("anchorSourceFrame") is None:
         report.blockers.append("fragmented video identities: select a checked fullRosterFrame and rerun before model analysis")
     reviewed = out.meta.get("reviewed_pass")
@@ -134,6 +137,9 @@ def prepared(raw: PlayTrack, options: dict | None = None, annotation: dict | Non
         "ballFrames":sum(f.ball is not None for f in out.frames),"totalFrames":len(out.frames),
         "ballSources":dict(Counter(f.ball.source or "unverified" for f in out.frames if f.ball)),
         "assisted":bool(out.meta.get("reviewed_pass") or out.meta.get("identity",{}).get("operatorAnchors")),"identity":out.meta.get("identity",{}).get("method"),
+        "identityAutomatic":bool(out.meta.get("identity",{}).get("automatic")),
+        "jerseyNumbersFound":sum(e.num is not None for e in out.roster.values()),
+        "backwardChecks":len(out.meta.get("identity",{}).get("backwardChecks",[])),
         "verification":out.meta.get("verification",{}),
         "notes":["Same-kit crossings may switch identities; roster size does not establish identity accuracy.",
                  "Unobserved players are absent. Separation estimates may miss off-camera defenders.",
@@ -160,6 +166,8 @@ def document(out, report):
     doc.update(analysisReady=report.reviewable,analysisBlockers=report.blockers,
                trackingQuality=out.meta["tracking_quality"])
     doc["provenance"]["reviewedPass"] = out.meta.get("reviewed_pass")
+    doc["provenance"]["automaticPass"] = out.meta.get("automatic_pass")
+    doc["provenance"]["jerseys"] = out.meta.get("jerseys")
     doc["provenance"]["identifiers"] = out.meta.get("video_identifiers",{})
     doc["provenance"]["ball"] = out.meta.get("ball",{})
     doc["provenance"]["identity"] = {k:v for k,v in out.meta.get("identity",{}).items() if k != "sourceBoxes"}

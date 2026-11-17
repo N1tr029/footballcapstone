@@ -57,6 +57,34 @@ CUT_DISTANCE = 0.35
 MIN_SHOT_FRAMES = 8
 
 
+def play_window(path,shot,maximum_seconds=20):
+    """Bound memory on long shots around their strongest field motion.
+
+    Sample streaming at 2 Hz. Eight seconds before the strongest motion usually
+    includes the set formation; this remains a shot-selection heuristic, and snap
+    detection downstream must independently establish the actual play clock.
+    """
+    if shot.seconds<=maximum_seconds:
+        return shot.start_frame,shot.end_frame+1
+    import cv2
+    cap=cv2.VideoCapture(str(path));previous=None;samples=[]
+    try:
+        for f in range(shot.start_frame,shot.end_frame+1,max(1,round(shot.fps/2))):
+            cap.set(cv2.CAP_PROP_POS_FRAMES,f);ok,image=cap.read()
+            if not ok:
+                break
+            gray=cv2.cvtColor(cv2.resize(image,(320,180)),cv2.COLOR_BGR2GRAY)[25:140].astype(np.float32)
+            if previous is not None:
+                samples.append((float(np.mean(np.abs(gray-previous))),f))
+            previous=gray
+    finally:
+        cap.release()
+    peak=max(samples)[1] if samples else (shot.start_frame+shot.end_frame)//2
+    length=round(maximum_seconds*shot.fps)
+    start=min(max(shot.start_frame,peak-round(8*shot.fps)),shot.end_frame+1-length)
+    return start,min(shot.end_frame+1,start+length)
+
+
 @dataclass
 class Shot:
     """One continuous camera, described by numbers cheap enough to compute streaming."""

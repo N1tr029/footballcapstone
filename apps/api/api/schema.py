@@ -88,6 +88,7 @@ class PlayerInfo(_Loose):
     nflId: int
     name: str
     jerseyNumber: int
+    jerseyNumberKnown: Optional[bool] = None
     club: str
     position: str
     side: str

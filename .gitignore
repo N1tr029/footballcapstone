@@ -29,6 +29,8 @@ apps/*/data/**
 !data/clips/
 !data/clips/specs/
 !data/clips/specs/*.json
+# Automatic upload specs are generated job metadata, not curated clip inputs.
+data/clips/specs/upload_*.json
 
 # ...and the field calibrator, for the same reason: it is the tool a clip gets
 # registered with when the vision model cannot do it, not an artifact. The frames

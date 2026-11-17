@@ -287,7 +287,35 @@ high school 17.78. Register a high-school field against NFL hashes and every pla
 lands six yards sideways, with a clean-looking reprojection error, because the
 homography absorbs the mistake.
 
-## The ball, and why it is the one thing still blocking the chain
+## Automatic uploads and later evidence
+
+`POST /video/uploads` now starts an asynchronous automatic analysis job. See the
+[API guide](../../docs/video-analysis-api.md) for frontend integration and the
+separate automatic/assisted fixtures.
+
+The automatic path selects its formation and snap, then uses detector-seeded SAM 2
+video masks with fixed IDs. Later clear observations prompt backward checks across
+selected teammate crossings. A correction requires both backward traces to match
+the earlier known identities; a failed match is left unresolved. Jersey OCR also
+samples later frames, accepting a number only after three source frames agree.
+
+Field calibration can transfer later readable yard numerals to an earlier view of
+the same camera through image registration. The fit must pass paint/turf checks.
+Ball events use actual moving-flight sightings and image-space body association;
+carrier poses and an interpolated flight provide an explicitly estimated ground
+path. Automatic arrival does not establish a completed pass.
+
+The reference clip produces 22 roster IDs, 97 frames and automatic throw/arrival
+events, and runs the real coordinate model without annotation inputs. The average
+visible roster is 17.25; no jersey numbers pass consensus. Seven actual ball
+sightings support 93 carrier estimates and four interpolated poses. The uncached
+SAM pass takes about 20 minutes on an M3 Pro. This one clip establishes a working
+path, not general identity accuracy or real-time performance.
+
+## Earlier ball-detector experiments
+
+The experiments below describe the earlier generic-detector baseline. The current
+automatic upload path uses the motion-flight and endpoint association above.
 
 Everything the play model needs from a clip is now derived automatically — a roster
 of twenty-two, which side has the ball, which way it is going, the line of

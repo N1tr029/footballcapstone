@@ -191,3 +191,17 @@ def check_markers(
         out.samples.append((fi, float(np.median(fl[:, 0])), float(np.median(ff[:, 0]))))
         out.scatter.extend([float(np.std(fl[:, 0])), float(np.std(ff[:, 0]))])
     return out
+
+
+def infer_situation(frames,registration):
+    """Read virtual-line geometry without inventing stated down-and-distance.
+
+    This is not an independent scale check: its yards come from registration.
+    """
+    measured=check_markers(frames,registration,0.)
+    if not measured.samples or measured.straightness>1.5 or measured.attacks is None:
+        return None
+    return {"lineOfScrimmage":round(measured.line_of_scrimmage,2),
+        "firstDownLine":round(measured.first_down_line,2),"attacks":measured.attacks,
+        "measured_gap_yards":round(measured.measured,2),"frames":len(measured.samples),
+        "source":"automatically detected broadcast lines through registration; stated yards-to-go is unknown"}

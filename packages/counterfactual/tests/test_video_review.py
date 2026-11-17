@@ -11,6 +11,7 @@ from gridiron_tracking.video_play import prepared, play_json
 from gridiron_counterfactual import forecast, review, features
 
 EXAMPLE = Path(__file__).resolve().parents[3]/"docs/examples/nfl_sf_sea.track.json"
+AUTO_EXAMPLE = EXAMPLE.with_name("nfl_sf_sea_auto.track.json")
 
 
 @pytest.mark.skipif(not MODEL.exists(),reason="fitted coordinate model missing")
@@ -62,3 +63,28 @@ def test_sparse_unprepared_video_cannot_fall_back_to_last_frame_forecast():
     raw.meta.pop("reviewed_pass",None)
     with pytest.raises(ValueError,match="not ready for analysis"):
         review.review_play(raw)
+
+
+@pytest.mark.skipif(not MODEL.exists(),reason="fitted coordinate model missing")
+def test_automatic_video_needs_no_review_annotations_to_run_the_real_model():
+    pytest.importorskip("sklearn")
+    raw = PlayTrack.from_json(json.loads(AUTO_EXAMPLE.read_text()))
+    assert not raw.meta.get("reviewed_pass")
+    assert raw.meta["identity"]["automatic"]
+    assert not raw.meta["identity"]["operatorAnchors"]
+    doc = play_json(raw)
+    assert doc["analysisReady"] and not doc["trackingQuality"]["assisted"]
+    assert len(doc["players"]) == 22
+    assert doc["trackingQuality"]["ballSources"] == {"carrier":93,"interpolated":4}
+    track = hindsight.read_play(doc)
+    assert track.event_time("pass_forward") == pytest.approx(3.1)
+    assert track.event_time("pass_arrived") == pytest.approx(3.6)
+    assert track.event_time("pass_outcome_caught") is None
+    result = review.review_play(track)
+    assert result.recommendation is not None and result.recommendation.confidence == "low"
+    assert result.recommendation.evidence["tracked_player_count"] == 18
+    assert result.recommendation.evidence["targeted_receiver_id"] in {p["nflId"] for p in doc["players"]}
+    assert any("automatic" in n.lower() for n in result.notes)
+    continued = hindsight.to_play_json(forecast.continue_play(track,result.forecast))
+    assert continued["snapFrameId"] == doc["snapFrameId"]
+    assert {p["nflId"] for p in continued["players"]} == {p["nflId"] for p in doc["players"]}

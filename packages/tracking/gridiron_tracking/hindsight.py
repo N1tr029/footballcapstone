@@ -103,7 +103,7 @@ def read_play(source: str | Path | dict[str, Any]) -> PlayTrack:
             team=side,
             label=str(p.get("name") or pid),
             name=p.get("name"),
-            num=_maybe_int(p.get("jerseyNumber")),
+            num=_maybe_int(p.get("jerseyNumber")) if p.get("jerseyNumberKnown",True) else None,
             role=p.get("position"),
         )
 
@@ -183,6 +183,7 @@ def read_play(source: str | Path | dict[str, Any]) -> PlayTrack:
         meta["prepare_report"] = {"reviewable":bool(d.get("analysisReady")), "blockers":d.get("analysisBlockers",[])}
         meta["tracking_quality"] = d.get("trackingQuality",{})
         meta["reviewed_pass"] = d.get("provenance",{}).get("reviewedPass")
+        meta["automatic_pass"] = d.get("provenance",{}).get("automaticPass")
         meta["play_direction"] = d.get("provenance",{}).get("sourcePlayDirection","right")
         meta["mirrored"] = d.get("provenance",{}).get("mirrored",False)
 
@@ -246,6 +247,7 @@ def to_play_json(
             "nflId": ids[pid],
             "name": entry.name or entry.label or pid,
             "jerseyNumber": entry.num if entry.num is not None else 0,
+            "jerseyNumberKnown": entry.num is not None,
             "club": entry.team,
             "position": entry.role or "",
             "side": ("offense" if entry.team == state.get("possessionTeam") else

@@ -493,7 +493,7 @@ def side_by_side(
                 team = track.roster[pid].team if pid in track.roster else "other"
                 cv2.circle(right, (sx(p.x), sy(p.y)), 8, COL.get(team, (150, 150, 150)), -1, cv2.LINE_AA)
             observation = (ball_observations or {}).get(src)
-            assisted = bool(track.meta.get("reviewed_pass"))
+            assisted = bool(track.meta.get("reviewed_pass") or track.meta.get("automatic_pass"))
             ball_xy = ([f.ball.x,f.ball.y] if assisted and f.ball is not None else
                        observation["field"] if observation and not assisted else
                        ([f.ball.x, f.ball.y] if f.ball is not None and not ball_observations else None))
@@ -509,7 +509,9 @@ def side_by_side(
             label(right, [
                 "THE RECREATION, same instant, seen from above",
                 f"t {f.t:+.1f}s   {len(f.players)} players   far sideline at top, as filmed",
-                ("ASSISTED ball: attributed to reviewed carriers; interpolated flight. Not direct detections."
+                ("AUTO ball: inferred possession; interpolated flight. Not direct detections."
+                 if track.meta.get("automatic_pass") else
+                 "ASSISTED ball: attributed to reviewed carriers; interpolated flight. Not direct detections."
                  if assisted else "Ball positions during flight are ground-plane projections; altitude is unknown."),
             ])
 

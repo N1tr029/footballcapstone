@@ -109,6 +109,8 @@ def review_play(
         notes.extend(track.meta["tracking_quality"].get("notes", []))
     if track.meta.get("reviewed_pass"):
         notes.append("Assisted pass: throw/catch reviewed from film; carrier/flight positions are estimates.")
+    if track.meta.get("automatic_pass"):
+        notes.append("Pass endpoints were inferred automatically from image evidence; ball path and possession are estimates, and completion is unknown.")
 
     roles.apply(track)
     assigned = track.meta["roles"]

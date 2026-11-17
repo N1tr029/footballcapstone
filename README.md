@@ -35,7 +35,9 @@ pytest` at the root runs the tracking, model and API regression suites.
 `uvicorn api.main:app --app-dir apps/api`. Open `/docs` for OpenAPI or `/video` for
 endpoint discovery. Public JSON uses **Hindsight schemaVersion 1** via `to_play_json`;
 `/video/examples/nfl_sf_sea/tracking.csv` and `/video/examples/nfl_sf_sea/tracking`
-serve CSV and an assisted replay example without running models. Video `/review`
+serve CSV and automatic/assisted replay examples without running models. Uploads
+start asynchronous field calibration, SAM 2 identity tracking with backward checks,
+ball/pass inference and optional jersey OCR by default. Video `/review`
 runs the play model after checking ball/events and identity readiness. See the
 [API setup and frontend guide](docs/video-analysis-api.md).
 

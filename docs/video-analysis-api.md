@@ -39,10 +39,109 @@ python scripts/setup_local_vision.py
 ```
 
 The local reader needs approximately 6 GB once. Reuse an existing download with
-`FOOTBALL_LOCAL_MODELS_DIR` in `.env`. Pinned field calibration works without it.
-Uploaded footage, detections and generated videos are local artifacts, not in Git.
+`FOOTBALL_LOCAL_MODELS_DIR` in `.env`. Automatic identity tracking downloads
+`sam2.1_t.pt` (about 75 MB) to `data/models` on its first run. Ultralytics is bounded
+to the tested 8.4 API because SAM's unfiltered masks preserve identity through
+occlusion. The trained carrier classifier is included in
+`packages/tracking/models/carrier.joblib`; the counterfactual install supplies its
+scikit-learn runtime.
 
-## Try the checked example
+OCR uses Apple Vision on macOS when `swiftc` is available, or optional Tesseract
+(`brew install tesseract`). Jersey OCR can abstain without blocking tracking.
+Field registration still needs readable field markings and a valid geometry fit.
+Uploaded footage, model downloads, detections and generated videos are local
+artifacts, not in Git.
+
+## Automatic upload flow
+
+Uploading starts analysis by default. The frontend does not have to supply field
+points, snap timing, a formation frame, player corrections or pass annotations:
+
+```bash
+curl -F file=@play.mp4 http://localhost:8000/video/uploads
+# {"videoId":"...", "analysisJobId":"...", "sourceUrl":"...", "media":{...}}
+curl http://localhost:8000/video/jobs/JOB_ID
+```
+
+Poll the returned `analysisJobId`. A completed job has
+`result.plays[]`, each with `clip`, `hasTrack`, `analysisReady`, `analysisBlockers`,
+`trackingQuality` and `assets`. Fetch `assets.tracking` for replay JSON; call
+`POST /video/clips/{clip}/review` when that play has `analysisReady:true`.
+`progress.stage` and `progress.message` describe the current stage while running.
+Join returned asset paths to the API origin.
+
+`POST /video/{videoId}/analyze` starts another automatic job for an existing upload.
+Use multipart `autoAnalyze=false` to upload without analysis and use the optional
+assisted endpoints below. A job completing does not imply every candidate is
+model-ready: unresolved footage returns blockers and any usable replay artifacts.
+
+The automatic worker selects up to ten candidate field shots and bounds each
+window to 20 seconds. It then:
+
+- Reads field geometry with the local model. When a single view is unreadable,
+  OCR can use yard numerals revealed later in the same camera shot, transfer them
+  back through image registration, and fit measured paint intersections. An
+  independent paint/turf check must accept the result.
+- Finds the set-to-live motion transition for the snap. A clip already in motion
+  does not receive a made-up snap.
+- Chooses an early formation from detections and kit colors, then prompts SAM 2
+  video tracking with those boxes. Empty masks keep their original IDs. A probable
+  full formation uses an 11-per-team prior; a partial view permits unequal counts.
+- Traces selected same-team crossings backward from later clear observations.
+  Both traces must match the earlier known identities before a swap or gap is
+  corrected. Failed matches remain unresolved. These checks are bounded to eight
+  crossings per clip; they do not recover every occlusion or unseen entrant.
+- Looks for a moving ball flight and associates its extrapolated image endpoints
+  with tracked bodies. At least six real source-frame sightings, fit, motion and
+  endpoint checks are required. Accepted endpoints produce `pass_forward` and
+  `pass_arrived`. Completion stays unknown; arrival does not create a caught event.
+- Reads jersey crops across the entire play, including later clearer frames.
+  At least three distinct frames must agree, with conflicting same-team claims
+  rejected. Unreadable numbers remain unknown. OCR alone does not merge people.
+
+Carried ball positions use the inferred center/passer/receiver while their poses
+exist. Flight positions are interpolated ground coordinates. They are estimates,
+not extra visual detections or 3D flight reconstruction. Original image sightings
+remain in provenance.
+
+This is batch processing. On an M3 Pro, the uncached 22-object SAM pass for the
+9.7-second reference clip took about 20 minutes. The subsequent fully automatic
+run, reusing detector/SAM results but computing field calibration, took 269 seconds.
+These are local measurements, not an upload latency guarantee. Jobs are serialized
+to limit memory use. Longer videos, unfamiliar camera angles, crowded piles,
+missing paint and off-camera athletes remain material limits.
+
+## Try the examples
+
+The automatic example uses the same video window with no clicked calibration,
+annotated snap, checked formation, identity corrections or pass labels:
+
+```bash
+curl http://localhost:8000/video/examples/nfl_sf_sea_auto/tracking
+curl http://localhost:8000/video/examples/nfl_sf_sea_auto/tracking/metadata
+```
+
+The committed [automatic play JSON](examples/nfl_sf_sea_auto.play.json) and
+[automatic internal track](examples/nfl_sf_sea_auto.track.json) retain the evidence:
+
+- 22 roster IDs, 11 per kit; mean observed roster 17.25. IDs are local/synthetic.
+- 97 output frames at 10 Hz; snap inferred at source frame 1672.
+- Throw inferred at source 1764 (3.1s), arrival at 1779 (3.6s), completion unknown.
+- Seven visible source-frame ball sightings, 1772–1778. The exported 97 ball poses
+  consist of 93 attributed carrier positions and four interpolated flight poses.
+- Eight backward checks: seven matched their earlier seams, one abstained.
+  This sample required no swap/gap edits from those checks; it does not establish
+  identity accuracy for other footage.
+- No jersey numbers passed temporal consensus on this broadcast. They remain
+  unknown instead of being assigned guesses.
+- The real play model runs on 18 recently observed players at release and returns
+  a low-confidence video recommendation. Missing defenders still affect it.
+
+These are results on one clip, not a broad accuracy benchmark. Detector agreement
+was 81.5%; that measures geometry overlap, not identity correctness. A fixed roster
+does not establish 22 continuously accurate trajectories.
+
+The older assisted example remains available for comparison:
 
 ```bash
 curl http://localhost:8000/video/examples/nfl_sf_sea/tracking
@@ -71,11 +170,12 @@ frame; same-kit crossings remain uncertain. A 22-person roster does not establis
 22 accurate continuous trajectories. Model results on this sample are a partial,
 low-confidence demonstration, not validated football advice.
 
-## Upload and analyze
+## Optional assisted endpoints
 
 | Step | Request | Response |
 | --- | --- | --- |
-| Upload | `POST /video/uploads`, multipart `file` | `videoId`, source URL, FPS, frame count, dimensions |
+| Upload | `POST /video/uploads`, multipart `file` | `videoId`, `analysisJobId`, source URL and media metadata; `autoAnalyze=false` opts out |
+| Analyze automatically | `POST /video/{videoId}/analyze` | Job ticket; no annotations required |
 | Find plays | `POST /video/{videoId}/scan` | Job ticket with candidate windows |
 | Poll | `GET /video/jobs/{jobId}` | `running`, `done`, `failed`; result/error |
 | Create clip | `POST /video/clips` | Named clip spec |
@@ -88,7 +188,7 @@ low-confidence demonstration, not validated football advice.
 | Review a pass | `POST /video/clips/{name}/pass-review` | Completed-pass annotation; returns updated play JSON |
 | Run model | `POST /video/clips/{name}/review` | Recommendation, notes and forecast in Hindsight format |
 | Debug | `GET /video/clips/{name}/track/raw` | Original sparse tracking and evidence |
-| Report | `GET /video/clips/{name}/report` | Geometry checks and assisted-ball summary |
+| Report | `GET /video/clips/{name}/report` | Geometry checks and ball provenance summary |
 | Replay video | `GET /video/clips/{name}/reconstruction.mp4` | Browser H.264 replay |
 | Ball evidence | `GET /video/clips/{name}/ball-tracking.mp4` | Slow motion of actual visible flight, when available |
 
@@ -107,15 +207,17 @@ low-confidence demonstration, not validated football advice.
 }
 ```
 
-Source frame indices are zero-based; `stopFrame` is exclusive. Scan `endFrame` is
-inclusive, so add one. `fullRosterFrame` is a manually inspected frame with exactly
+This JSON is an assisted `POST /video/clips` request, not the automatic upload
+requirement. Omitting `fullRosterFrame` selects automatic SAM tracking. Source
+frame indices are zero-based; `stopFrame` is exclusive. Scan `endFrame` is
+inclusive, so add one. When supplied, `fullRosterFrame` is an inspected frame with exactly
 22 athlete detections. It enables fixed roster tracking: local IDs `p00..p21`
 remain dormant across missed detections instead of spawning new players.
 Visible player counts can be unequal in cropped frames. The anchor must really
 contain 11 per team; choosing an arbitrary frame is not a roster check.
 
-`level` accepts `nfl`, `college`, `high_school`. Name the actual `snapFrame` for
-model analysis. Optional `gameId`, `playId`, `startTime` and club labels annotate
+`level` accepts `nfl`, `college`, `high_school`. Automatic uploads infer the snap;
+an assisted request can supply the actual `snapFrame`. Optional `gameId`, `playId`, `startTime` and club labels annotate
 known metadata. Otherwise IDs are local/synthetic and timestamps remain unknown.
 Team A is the lighter kit and B the darker kit. Existing clip names return 409.
 
@@ -147,9 +249,9 @@ field orientation. An anchor must match an actual detection within three yards.
 It is an identity correction, not permission to invent a position. Updated
 identity configuration makes the old play endpoint return 409 until rerun.
 
-## Sparse balls and assisted passes
+## Unresolved footage and assisted passes
 
-Unreviewed clips may have only a few sightings. They remain replayable but return
+Clips whose snap/pass cannot be inferred may have only a few sightings. They remain replayable but return
 `analysisReady:false` and actionable `analysisBlockers`. `/review` returns 422
 until the required ball/pass inputs exist. A completed processing job does not
 mean a model-ready play; check `hasTrack`, `analysisReady`, `analysisBlockers` and
@@ -174,19 +276,22 @@ and receiver after catch, only while those poses exist. During flight its ground
 position is linearly interpolated between those endpoints. Ball height is unknown;
 this is not 3D flight reconstruction. Source-image pixels remain evidence, never
 replaced with interpolated sightings. The timings are rounded to the 10 Hz export;
-original source frames remain in provenance. Example review timing is approximate
-within about two source frames.
+original source frames remain in provenance. Reviewed timing remains an estimate,
+not synchronized ground-truth tracking.
 
 ## Frontend contract
 
 - `players[]` is the roster. Key markers by `nflId`, not array index. `trackId` maps
   to raw video identity. `club` is SF/SEA when supplied; `side` is offense/defense.
+- `jerseyNumberKnown:false` means the number is unknown. The integer
+  `jerseyNumber:0` is then a compatibility placeholder; hide it. An accepted actual
+  number 0 has `jerseyNumberKnown:true`.
 - `frames[].players[]` contains only observed or briefly interpolated poses. Do not
   freeze missing players or create them at (0,0). Gaps over 0.25s stay unfilled.
 - Time is `(frameId - snapFrameId) / frameRate`. Offense attacks +x; angles use
   NFL compass bearings (0 along +y, 90 along +x).
-- `event` is the primary event for existing consumers; `events[]` preserves both
-  arrival and caught events on the same frame.
+- `event` is the primary event for existing consumers; `events[]` preserves
+  co-occurring events. Automatic arrival does not imply a caught event.
 - Optional `ball.dataOrigin` distinguishes `detected`, `carrier`, `coasted` and
   `interpolated`. `carrierNflId` explicitly identifies an attributed carrier.
   Hide the ball marker on missing-ball frames.
@@ -194,8 +299,12 @@ within about two source frames.
   by source frame. Only these support rings on the actual footage. Ground-plane
   projection of an airborne pixel is not its real position at ground height.
 - `trackingQuality` includes roster/visible counts, ball sources, missing players
-  at throw/arrival, assistance and geometry checks. Geometry agreement does not
-  establish identity accuracy.
+  at throw/arrival, assistance, `identityAutomatic`, `backwardChecks`,
+  `jerseyNumbersFound` and geometry checks. Geometry agreement does not establish
+  identity accuracy. `provenance.automaticPass` records source frames, endpoint
+  errors, heuristic confidence score and unknown outcome. Its score is not a
+  calibrated probability. `provenance.identity.backwardChecks` records each seam
+  decision and any actual edits.
 - `/review` uses the real coordinate model and returns a low-confidence video
   recommendation with coverage caveats. The forecast retains original player IDs
   and snap clock. `simulationStartFrameId` marks where model output begins.
@@ -219,7 +328,18 @@ with `hasTrack:false`; runtime errors set the job to `failed`.
 python -m pytest -q
 ```
 
-Tests cover the replay schema, sparse-ball rejection, reviewed event/carrier
-provenance, missing poses, dormant identities, stable forecast IDs and actual
-model inference on the checked video fixture. Source video rerenders are a
-separate local check; detector/render calls are stubbed in routine API tests.
+Tests cover the replay schema, automatic job orchestration without annotations,
+snap/flight evidence rejection, later-to-earlier identity repair and abstention,
+temporal jersey consensus, calibration reference frames, missing poses, stable
+forecast IDs and actual model inference on both video fixtures. Source video
+rerenders are a separate local check; detector/render calls are stubbed in routine
+API tests.
+
+The local end-to-end check also uploaded a lossless 290-frame copy of the reference
+window through FastAPI's HTTP test client, ran the real automatic worker, fetched
+the Hindsight document and called `/review` with the real coordinate model. It
+completed with `analysisReady:true` and no processing problems. All uploaded pixels
+were verified against the source before reusing genuine detector/SAM inference
+caches; calibration, snap/pass inference, OCR, exports and model review ran on the
+upload. This cache-assisted integration check is separate from the uncached SAM
+timing above.

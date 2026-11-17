@@ -153,7 +153,9 @@ def prepare(track: PlayTrack, offense: str | None = None) -> tuple[PlayTrack, Pr
             counts[entry.team] = counts.get(entry.team, 0) + 1
         roster_report = rostermod.RosterReport(before=len(track.roster), after=len(track.roster),
             per_side=counts, coverage=sum(len(f.players) for f in track.frames)/max(1,len(track.frames)*len(track.roster)),
-            notes=["Inspected formation identities retained, including temporarily unobserved athletes."])
+            notes=[("Automatic formation identities retained, including temporarily unobserved athletes."
+                    if track.meta.get("identity",{}).get("automatic") else
+                    "Inspected formation identities retained, including temporarily unobserved athletes.")])
         out = track
     else:
         out, roster_report = rostermod.consolidate(track)
@@ -281,6 +283,10 @@ def prepare(track: PlayTrack, offense: str | None = None) -> tuple[PlayTrack, Pr
         )
     elif out.meta.get("reviewed_pass"):
         report.notes.append("Throw/catch and carriers were reviewed from film; the ball path includes attributed possession and interpolated flight, not continuous detections.")
+    elif (out.meta.get("automatic_pass",{}).get("validated") and
+          out.meta["automatic_pass"].get("confidence",0)>=.65 and
+          len(out.meta["automatic_pass"].get("visibleSourceFrames",[]))>=6):
+        report.notes.append("Pass endpoints were inferred from visible flight and image-space body trajectories; carrier/flight positions are estimates and completion is unknown.")
     elif report.ball_travelled < MIN_BALL_TRAVEL:
         report.blockers.append(
             f"the ball track covers {report.ball_travelled:.1f} yards over the whole "
@@ -334,5 +340,8 @@ def prepare(track: PlayTrack, offense: str | None = None) -> tuple[PlayTrack, Pr
             )
 
     report.reviewable = not report.blockers
+    if out.meta.get("identity",{}).get("automatic") and out.event_time("ball_snap") is None:
+        report.blockers.append("no automatic snap was identified in this clip")
+        report.reviewable=False
     out.meta["prepare_report"] = report.to_json()
     return out, report

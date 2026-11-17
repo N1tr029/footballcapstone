@@ -194,6 +194,9 @@ def apply(track: PlayTrack) -> PassEvents:
         a,b = track.frame_at(thrown).ball,track.frame_at(arrived).ball
         if a and b:
             found.flight_yards = math.hypot(b.x-a.x,b.y-a.y)
+        if track.meta.get("automatic_pass"):
+            found.source=track.meta["automatic_pass"]["source"]
+            found.confidence=track.meta["automatic_pass"]["confidence"]
     else:
         found = derive(track)
     if not found.found:

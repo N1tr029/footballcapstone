@@ -125,6 +125,12 @@ class RegisterSpec:
 class TrackSpec:
     """How detections become players."""
 
+    identity_mode: str = "legacy"
+    """Existing specs retain their tracker; new API uploads select automatic SAM 2."""
+    identity_weights: str = "data/models/sam2.1_t.pt"
+    backward_check: bool = True
+    jersey_numbers: bool = True
+
     gate_yards: float = 2.5
     max_age: int = 8
     min_hits: int = 3

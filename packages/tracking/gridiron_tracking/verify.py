@@ -365,6 +365,8 @@ def side_by_side(
         raise ValueError("output fps must be positive")
     if not track.frames:
         raise ValueError("cannot render an empty track")
+    from .replay_stability import display_track
+    replay=display_track(track) if track.meta.get("source")=="vision" else track
     any_frame = next(iter(frames.values()))
     fh, fw = any_frame.shape[:2]
 
@@ -428,6 +430,7 @@ def side_by_side(
         for i in range(count):
             t = (first - frame_offset) / fps + i / out_fps
             f = _render_frame_at(track, t)
+            shown = _render_frame_at(replay, t)
             src = int(round(f.t * fps)) + frame_offset
             if src not in frames:
                 continue
@@ -483,18 +486,20 @@ def side_by_side(
                 "somebody already held    red cross = lands on nobody",
                 f"{on} of {on + off} players held, {dupes} duplicate"
                 + f"   t {f.t:+.1f}s",
-                f"Blue {counts['teamA']} (light jerseys)   Yellow {counts['teamB']} (dark jerseys)"
-                "   Gray = unknown",
+                f"Roster {len(track.roster)} (teams locked)   tracked now: blue {counts['teamA']}, yellow {counts['teamB']}",
                 "Ball: VISIBLE (green ring)" if ball_visible else "Ball: no direct sighting this frame",
             ])
 
             right = board.copy()
-            for pid, p in f.players.items():
+            for pid, p in shown.players.items():
                 team = track.roster[pid].team if pid in track.roster else "other"
-                cv2.circle(right, (sx(p.x), sy(p.y)), 8, COL.get(team, (150, 150, 150)), -1, cv2.LINE_AA)
+                estimated=pid not in f.players
+                color=COL.get(team,(150,150,150))
+                cv2.circle(right,(sx(p.x),sy(p.y)),8,color,2 if estimated else -1,cv2.LINE_AA)
+                cv2.putText(right,pid,(sx(p.x)+10,sy(p.y)-3),cv2.FONT_HERSHEY_SIMPLEX,.35,color,1,cv2.LINE_AA)
             observation = (ball_observations or {}).get(src)
             assisted = bool(track.meta.get("reviewed_pass") or track.meta.get("automatic_pass"))
-            ball_xy = ([f.ball.x,f.ball.y] if assisted and f.ball is not None else
+            ball_xy = ([shown.ball.x,shown.ball.y] if assisted and shown.ball is not None else
                        observation["field"] if observation and not assisted else
                        ([f.ball.x, f.ball.y] if f.ball is not None and not ball_observations else None))
             if ball_xy is not None:
@@ -508,7 +513,7 @@ def side_by_side(
                            (235, 245, 250) if seen else (120, 185, 215), -1, cv2.LINE_AA)
             label(right, [
                 "THE RECREATION, same instant, seen from above",
-                f"t {f.t:+.1f}s   {len(f.players)} players   far sideline at top, as filmed",
+                f"t {f.t:+.1f}s   {len(shown.players)} roster players   solid = tracked, hollow = estimated",
                 ("AUTO ball: inferred possession; interpolated flight. Not direct detections."
                  if track.meta.get("automatic_pass") else
                  "ASSISTED ball: attributed to reviewed carriers; interpolated flight. Not direct detections."

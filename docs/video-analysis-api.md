@@ -100,9 +100,26 @@ window to 20 seconds. It then:
   rejected. Unreadable numbers remain unknown. OCR alone does not merge people.
 
 Carried ball positions use the inferred center/passer/receiver while their poses
-exist. Flight positions are interpolated ground coordinates. They are estimates,
+exist in the evidence. The replay keeps these carrier actors present through
+tracking gaps and follows their estimated display positions. Flight positions are interpolated ground coordinates. They are estimates,
 not extra visual detections or 3D flight reconstruction. Original image sightings
 remain in provenance.
+
+The replay now retains the same roster on every frame. A dropped detection no
+longer removes its actor. If a player reappears at C after last being seen at A,
+the missing B positions are interpolated from both ends. At an open-ended gap the
+actor coasts briefly with damping, then retains its remembered position. Display
+positions are smoothed and speed-bounded to avoid jitter and teleports. IDs, clubs
+and team colors remain fixed. Each known roster actor has a coordinate on every
+frame; an athlete never observed at all is reported explicitly instead of placed
+at a made-up origin.
+
+Original observations are retained separately from these display estimates.
+Team-locked, one-to-one body matching rejects a SAM mask that drifts onto a
+confidently opposing kit. When that happens, the replay fills the gap instead of
+moving that ID onto the opponent. The coordinate model continues to use the
+original observation subset, so constant replay membership does not claim all
+22 athletes are currently measured.
 
 This is batch processing. On an M3 Pro, the uncached 22-object SAM pass for the
 9.7-second reference clip took about 20 minutes. The subsequent fully automatic
@@ -124,7 +141,9 @@ curl http://localhost:8000/video/examples/nfl_sf_sea_auto/tracking/metadata
 The committed [automatic play JSON](examples/nfl_sf_sea_auto.play.json) and
 [automatic internal track](examples/nfl_sf_sea_auto.track.json) retain the evidence:
 
-- 22 roster IDs, 11 per kit; mean observed roster 17.25. IDs are local/synthetic.
+- The same 22 roster IDs on every replay frame, 11 per kit. IDs are local/synthetic.
+  The stricter body checks retain about 14 observations per frame; the remainder
+  are explicitly estimated replay positions.
 - 97 output frames at 10 Hz; snap inferred at source frame 1672.
 - Throw inferred at source 1764 (3.1s), arrival at 1779 (3.6s), completion unknown.
 - Seven visible source-frame ball sightings, 1772–1778. The exported 97 ball poses
@@ -134,11 +153,12 @@ The committed [automatic play JSON](examples/nfl_sf_sea_auto.play.json) and
   identity accuracy for other footage.
 - No jersey numbers passed temporal consensus on this broadcast. They remain
   unknown instead of being assigned guesses.
-- The real play model runs on 18 recently observed players at release and returns
+- The real play model runs on 12 recently observed players at release and returns
   a low-confidence video recommendation. Missing defenders still affect it.
 
 These are results on one clip, not a broad accuracy benchmark. Detector agreement
-was 81.5%; that measures geometry overlap, not identity correctness. A fixed roster
+is about 97.8% after exclusive body matching (previously 81.5%); that measures
+geometry overlap, not identity correctness. A fixed roster
 does not establish 22 continuously accurate trajectories.
 
 The older assisted example remains available for comparison:
@@ -161,8 +181,9 @@ recorded in [the annotation](calibration/nfl_sf_sea-review.json). It contains:
 - 22 roster IDs, 11 SF / 11 SEA; no births after the inspected formation.
 - 97 output frames at 10 Hz, with the snap exactly at t=0.
 - `pass_forward` at 3.2s and `pass_arrived` + `pass_outcome_caught` at 3.6s.
-- Ball positions in 95 frames: 92 attributed carrier positions and 3 interpolated
-  flight positions. Two frames remain unknown. This is not 95 visual detections.
+- The original internal track has ball positions in 95 frames: 92 attributed
+  carrier positions and three interpolated flight positions. The continuous replay
+  also fills its two display gaps. These are estimates, not visual detections.
 - Seven actual source-image sightings at frames 1772–1778, preserved separately.
 
 The broadcast crops players out. Mean observed roster is about 17 players per
@@ -286,15 +307,29 @@ not synchronized ground-truth tracking.
 - `jerseyNumberKnown:false` means the number is unknown. The integer
   `jerseyNumber:0` is then a compatibility placeholder; hide it. An accepted actual
   number 0 has `jerseyNumberKnown:true`.
-- `frames[].players[]` contains only observed or briefly interpolated poses. Do not
-  freeze missing players or create them at (0,0). Gaps over 0.25s stay unfilled.
+- `frames[].players[]` retains the same known roster IDs on every frame, in roster
+  order. Create actors once and key them by `nflId`; do not renumber or recolor by
+  array index. Each sample also carries its fixed `club` and `side`.
+- `observed:true` identifies an original video-tracking sample. Its displayed
+  coordinates are smoothed, while `observation` preserves the original sample.
+  `observed:false` means a display estimate. `trackingStatus` is `interpolated`,
+  `predicted`, `last_known` or `backfilled`; forecast samples use `simulated`.
+  Keep the actor visible and optionally draw it hollow/faded while estimated.
+  `positionAgeSeconds` records the distance in time to its remembered observation.
+- The internal `/track/raw` and BDB exports remain observation data, with sparse
+  positions and short-gap interpolation. `hindsight.read_play` restores the original
+  samples from a stabilized document for model analysis. Filled replay markers do
+  not become fresh evidence. Never-observed roster IDs appear in
+  `provenance.replayStability.neverObservedIds`; no coordinate is invented for them.
 - Time is `(frameId - snapFrameId) / frameRate`. Offense attacks +x; angles use
   NFL compass bearings (0 along +y, 90 along +x).
 - `event` is the primary event for existing consumers; `events[]` preserves
   co-occurring events. Automatic arrival does not imply a caught event.
 - Optional `ball.dataOrigin` distinguishes `detected`, `carrier`, `coasted` and
   `interpolated`. `carrierNflId` explicitly identifies an attributed carrier.
-  Hide the ball marker on missing-ball frames.
+  Accepted pass replays keep the ball with the continuous carrier/flight path.
+  A display-filled ball stores its original sample (or null) in `ball.observation`.
+  Hide the marker if no pass/ball estimate is available.
 - `provenance.ball.image_observations` contains original pixel sightings indexed
   by source frame. Only these support rings on the actual footage. Ground-plane
   projection of an airborne pixel is not its real position at ground height.
@@ -305,6 +340,11 @@ not synchronized ground-truth tracking.
   errors, heuristic confidence score and unknown outcome. Its score is not a
   calibrated probability. `provenance.identity.backwardChecks` records each seam
   decision and any actual edits.
+- `replayRosterStable`, `replayPlayersPerFrame` and `replayEstimatedSamples` describe
+  continuous replay membership. `ballFrames`/`ballSources` describe replay output;
+  `analysisBallFrames`/`analysisBallSources` retain the counts before display
+  filling. `meanObservedPlayers` and `missingAtThrow` still describe actual analysis
+  coverage, not the number of visible replay actors.
 - `/review` uses the real coordinate model and returns a low-confidence video
   recommendation with coverage caveats. The forecast retains original player IDs
   and snap clock. `simulationStartFrameId` marks where model output begins.

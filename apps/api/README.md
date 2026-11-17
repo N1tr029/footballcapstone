@@ -35,6 +35,10 @@ video routes. `GET /video/examples/nfl_sf_sea/tracking.csv` and
 checkout, without downloading models. Video code currently lives on `carrier-ball`;
 it must be merged before a checkout of `main` will expose these routes.
 `GET /video/examples/nfl_sf_sea_auto/tracking` serves the separate automatic example.
+Video replay JSON retains every known roster actor on every frame. Missing
+positions are interpolated between sightings, or briefly coasted to a remembered
+position. Teams stay fixed and `observed`/`trackingStatus` distinguish filled
+positions. Original observation data remains available for model analysis.
 
 ## Point Hindsight at it
 

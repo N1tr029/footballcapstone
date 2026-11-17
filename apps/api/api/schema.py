@@ -74,6 +74,10 @@ class PlayerSample(_Loose):
     o: Optional[float] = None
     dir: Optional[float] = None
     s: float = 0.0
+    observed: Optional[bool] = None
+    trackingStatus: Optional[str] = None
+    dataOrigin: Optional[str] = None
+    positionAgeSeconds: Optional[float] = None
 
 
 class Frame(_Loose):

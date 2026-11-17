@@ -74,10 +74,13 @@ def test_bad_reviews_cannot_publish_events(change):
     assert raw.to_json() == before
 
 
-def test_unobserved_carrier_stays_missing_and_missing_catch_refuses_review():
+def test_replay_fills_carrier_gaps_but_analysis_and_catch_validation_keep_missing_evidence():
     raw = video_track(); del raw.frames[12].players["wr"]
     doc = play_json(raw,annotation=ANNOTATION)
-    assert "ball" not in doc["frames"][12]
+    assert doc["frames"][12]["ball"]["observation"] is None
+    restored=hindsight.read_play(doc)
+    receiver=str(next(p["nflId"] for p in doc["players"] if p["trackId"]=="wr"))
+    assert receiver not in restored.frames[12].players and restored.frames[12].ball is None
     del raw.frames[10].players["wr"]
     with pytest.raises(ValueError,match="observed positions"):
         play_json(raw,annotation=ANNOTATION)

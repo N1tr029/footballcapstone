@@ -335,6 +335,7 @@ def _analyze_video(video_id):
             start=start,stop=stop,
             title=f"Uploaded play {i+1}")
         spec.register.mode="auto"
+        spec.out_fps=30
         spec.track.identity_mode="sam2"
         spec.track.pre_teams=True;spec.track.team_cost=.8
         spec.track.ball=False;spec.track.ball_motion=True;spec.track.carrier=True
@@ -726,6 +727,8 @@ def review(name: str):
     combined = to_play_json(continue_play(out,result.forecast))
     start = result.forecast.frames[0].t
     combined["simulationStartFrameId"] = min(i+1 for i,f in enumerate(out.frames) if f.t >= start)
+    from gridiron_tracking.replay_stability import stabilize_document
+    combined=stabilize_document(combined)
     return {**result.to_json(),"trackingQuality":out.meta["tracking_quality"],
             "forecast":combined}
 

@@ -142,7 +142,7 @@ def prepared(raw: PlayTrack, options: dict | None = None, annotation: dict | Non
         "backwardChecks":len(out.meta.get("identity",{}).get("backwardChecks",[])),
         "verification":out.meta.get("verification",{}),
         "notes":["Same-kit crossings may switch identities; roster size does not establish identity accuracy.",
-                 "Unobserved players are absent. Separation estimates may miss off-camera defenders.",
+                 "Unobserved players retain estimated replay positions. Analysis uses original observations; separation estimates may miss off-camera defenders.",
                  "Unidentified positions can cause linemen to be treated as possible receivers."]}
     for event,label in (("pass_forward","Throw"),("pass_arrived","Arrival")):
         t = out.event_time(event)
@@ -171,4 +171,5 @@ def document(out, report):
     doc["provenance"]["identifiers"] = out.meta.get("video_identifiers",{})
     doc["provenance"]["ball"] = out.meta.get("ball",{})
     doc["provenance"]["identity"] = {k:v for k,v in out.meta.get("identity",{}).items() if k != "sourceBoxes"}
-    return doc
+    from .replay_stability import stabilize_document
+    return stabilize_document(doc)

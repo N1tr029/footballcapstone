@@ -6,7 +6,7 @@
   "step": 1,
   "snap_frame": null,
   "fps": null,
-  "out_fps": 12,
+  "out_fps": 30,
   "distance_yards": null,
   "title": "49ers at Seahawks (NFL 2026 wk5) - sideline broadcast",
   "notes": "Automatic upload-path test: no pinned calibration, snap, checked formation, identity corrections, pass events or club labels. Temporal paint OCR and forward/backward SAM use only video evidence.",

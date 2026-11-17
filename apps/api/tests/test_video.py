@@ -291,7 +291,9 @@ def test_primary_video_endpoints_share_the_replay_contract(client):
     from api.schema import PlayDetail
     PlayDetail.model_validate(doc)
     assert len(doc["players"]) == 22 and doc["analysisReady"]
-    assert sum("ball" in f for f in doc["frames"]) == 95
+    assert sum("ball" in f for f in doc["frames"]) == 97
+    assert doc["trackingQuality"]["analysisBallFrames"]==95
+    assert all(len(f["players"])==22 for f in doc["frames"])
     assert client.get("/video/clips/checked/track/raw").json() == raw
 
 
@@ -381,6 +383,9 @@ def test_automatic_example_is_replay_ready_with_explicit_unknown_jerseys(client)
     doc=response.json()
     assert doc["schemaVersion"]==1 and doc["analysisReady"]
     assert len(doc["players"])==22 and doc["trackingQuality"]["identityAutomatic"]
+    ids={p["nflId"] for p in doc["players"]}
+    assert all({p["nflId"] for p in f["players"]}==ids for f in doc["frames"])
+    assert doc["trackingQuality"]["replayRosterStable"]
     assert not doc["trackingQuality"]["assisted"]
     assert all(not p["jerseyNumberKnown"] for p in doc["players"])
     assert doc["provenance"]["automaticPass"]["outcome"]=="unknown"

@@ -116,7 +116,12 @@ def resample(roster,boxes,registration,*,fps,snap,first,last,rate=10):
             at=int(np.searchsorted(ts,t))
             if at<len(ts) and abs(ts[at]-t)<1e-7:
                 indices.append(i);path.append(xy[at]);continue
-            if at==0 or at==len(ts) or ts[at]-ts[at-1]>.25:
+            if at==0 or at==len(ts):
+                nearest=0 if at==0 else len(ts)-1
+                if abs(ts[nearest]-t)<=.5/rate+1e-7:
+                    indices.append(i);path.append(xy[nearest])
+                continue
+            if ts[at]-ts[at-1]>.25:
                 continue
             a=(t-ts[at-1])/(ts[at]-ts[at-1]);indices.append(i);path.append(xy[at-1]*(1-a)+xy[at]*a)
         cuts=[0]+[i for i in range(1,len(indices)) if indices[i]-indices[i-1]>1]+[len(indices)]
@@ -166,13 +171,17 @@ def track(frames,boxes,registration,*,fps,snap,weights,cache_dir,capacity=11,
                                 reverse=True,stop=start,log=log)
             result=reconcile_window(tracked,reverse,start,stop,pids)
             reconciliations.append({**window,**result})
+    from .identity_observations import reconcile
+    tracked,observation_checks=reconcile(tracked,boxes,registration,roster,anchor,fps)
+    log(f"    identity observations: {observation_checks}")
     out=PlayTrack(roster=roster,frames=resample(roster,tracked,registration,fps=fps,snap=snap,
         first=min(frames),last=max(frames)),meta={"source":"vision","rate":10,"fps_in":fps,
         "identity":{"method":"automatic detector-seeded SAM 2 with backward crossing checks",
             "automatic":True,"anchorSourceFrame":anchor,"rosterSize":len(roster),
             "newIdentitiesAfterAnchor":0,"operatorAnchors":[],
             "sourceBoxes":{str(f):b for f,b in tracked.items()},"backwardChecks":reconciliations,
-            "note":"Fixed IDs are estimates. Hidden poses remain absent; a backward correction requires a matching earlier identity seam."}})
+            "observationChecks":observation_checks,"teamLocked":True,
+            "note":"Fixed IDs and teams persist. Hidden poses are absent from observation data and filled explicitly for replay; backward corrections require a matching earlier identity seam."}})
     if jerseys:
         from .jerseys import annotate
         ocr_boxes={}

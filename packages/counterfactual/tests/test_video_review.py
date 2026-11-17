@@ -82,7 +82,7 @@ def test_automatic_video_needs_no_review_annotations_to_run_the_real_model():
     assert track.event_time("pass_outcome_caught") is None
     result = review.review_play(track)
     assert result.recommendation is not None and result.recommendation.confidence == "low"
-    assert result.recommendation.evidence["tracked_player_count"] == 18
+    assert result.recommendation.evidence["tracked_player_count"] == 12
     assert result.recommendation.evidence["targeted_receiver_id"] in {p["nflId"] for p in doc["players"]}
     assert any("automatic" in n.lower() for n in result.notes)
     continued = hindsight.to_play_json(forecast.continue_play(track,result.forecast))

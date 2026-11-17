@@ -112,6 +112,10 @@ def read_play(source: str | Path | dict[str, Any]) -> PlayTrack:
         fid = f.get("frameId")
         players: dict[str, PlayerFrame] = {}
         for p in f.get("players") or []:
+            if d.get("provenance",{}).get("replayStability"):
+                if not p.get("observed",False) and not (d.get("simulated") and p.get("trackingStatus")=="simulated"):
+                    continue
+                p=p.get("observation",p)
             pid = _key(p.get("nflId"))
             o = p.get("o")
             players[pid] = PlayerFrame(
@@ -127,7 +131,10 @@ def read_play(source: str | Path | dict[str, Any]) -> PlayTrack:
         ball = None
         if f.get("ball"):
             b = f["ball"]
-            ball = Ball(x=float(b["x"]), y=float(b["y"]), source=b.get("dataOrigin"))
+            if d.get("provenance",{}).get("replayStability") and "observation" in b:
+                b=b["observation"]
+            if b:
+                ball = Ball(x=float(b["x"]), y=float(b["y"]), source=b.get("dataOrigin"))
 
         event = f.get("event")
         frames.append(TrackingFrame(

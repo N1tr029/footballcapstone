@@ -182,42 +182,21 @@ Whole-frame Qwen reading remains unreliable on this shot. Rotating a crop of
 the far number row upright produces the correct 30 and 40, which confirmed the
 labels used for the assisted calibration.
 
-The window is source frames 1575–1864, including the film-estimated snap at 1672
-and the tackle. Camera motion follows turf, with players and stationary broadcast
-captions excluded. Tracking stays at 10 Hz; the 12 fps video interpolates display
-positions onto the source clock and lasts 9.67 seconds. Sampled paint checks are
-stored in `track.json` metadata; a null score means insufficient visible paint.
+The window is source frames 1575–1864, including the snap and tackle. The
+assisted configuration remains for comparison; `nfl_sf_sea_auto` uses automatic
+calibration, snap, identities and pass inference. Both public replay documents
+now retain all known roster actors on every frame, with fixed team colors and
+explicitly estimated positions between sightings. The automatic preview runs at
+30 fps while its exported tracking clock remains 10 Hz. See the automatic path
+below and the [frontend guide](../../docs/video-analysis-api.md) for current
+measurements and per-sample observation flags.
 
-Outputs are in `data/runs/nfl_sf_sea`: `reconstruction.mp4` is the browser-playable
-video, `track.json` is the tracking contract, `report.txt` gives the checks, and
-`export/` contains CSV and JSON with provenance. Reprojection agreement is 83.4%,
-which checks consistency with detections rather than true player identities.
-There are still fragmented identities and players lost to occlusion or camera
-framing. Team colours are blue for light jerseys (SF), yellow for dark jerseys
-(SEA), and gray for uncertain identities. Torso and pants evidence uses exclusive
-matches, initial kit centres, and a temporal median constrained to at most 11
-simultaneous athletes per team. Persistent jersey conflicts split a mixed track
-into separate identities rather than carrying the old colour onto the new person.
-This improves team colours but increases fragmentation; these are still not 22
-continuous player identities. The inspected complete formation at source frame
-1578 is 11/11, with all 22 jerseys visually checked. Cropped frames need not have
-equal counts. `track.full_roster_frame` is an explicit inspected hint, not an
-automatic claim that 22 person detections must be 22 athletes.
-
-The generic ball detector and carrier estimator are disabled for this clip.
-`track.ball_motion` detects isolated brown candidates outside player boxes and
-requires a sustained trajectory after camera compensation. On this clip it finds
-the seven visible flight frames 1772–1778, with no manual ball seed. These are
-stored at source rate under `meta.ball.image_observations`; two sightings fall on
-the contract's 10 Hz grid. The green source-video ring and trail use actual pixel
-sightings. Missing frames, including the ball hidden in a player's hands, stay
-unknown. The field position is a ground-plane projection, not recovered airborne
-height. This is a visually checked pass example, not a validated general detector.
-`ball-preview.mp4` shows the pass at 0.2x speed with enlarged source pixels;
-`ball-tracking.mp4` is its H.264 copy for browser playback.
-
-The isolated `unity/` export is experimental and reports missing player positions;
-it does not replace the Unity application's existing play library.
+The source-video ball ring and trail use only the seven actual image sightings
+at source frames 1772–1778. The replay's carrier and flight path is estimated;
+projecting an airborne pixel onto the turf does not recover its true height.
+`ball-preview.mp4` shows actual sightings at 0.2x speed; `ball-tracking.mp4` is its
+H.264 browser copy. Raw observations stay sparse even though the continuous replay
+keeps players and the accepted pass's ball present.
 
 ## Registering a clip the vision model cannot
 
@@ -306,8 +285,13 @@ carrier poses and an interpolated flight provide an explicitly estimated ground
 path. Automatic arrival does not establish a completed pass.
 
 The reference clip produces 22 roster IDs, 97 frames and automatic throw/arrival
-events, and runs the real coordinate model without annotation inputs. The average
-visible roster is 17.25; no jersey numbers pass consensus. Seven actual ball
+events, and runs the real coordinate model without annotation inputs. Replay now
+retains all 22 actors on every frame: future-bracketed gaps are interpolated and
+open-ended gaps coast to a remembered position. Display positions are smoothed;
+immutable team labels and exclusive kit-gated body matching reject opponent drift.
+Original sparse observations are preserved for model analysis and every filled
+replay position is labelled. About 14 observations per frame survive the stricter
+checks; no jersey numbers pass consensus. Seven actual ball
 sightings support 93 carrier estimates and four interpolated poses. The uncached
 SAM pass takes about 20 minutes on an M3 Pro. This one clip establishes a working
 path, not general identity accuracy or real-time performance.

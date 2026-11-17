@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import math
+import json
 from itertools import combinations
 from pathlib import Path
 
@@ -138,12 +139,27 @@ def resample(roster,boxes,registration,*,fps,snap,first,last,rate=10):
 
 
 def track(frames,boxes,registration,*,fps,snap,weights,cache_dir,capacity=11,
-          backward=True,jerseys=True,log=lambda *a:None):
+          backward=True,jerseys=True,role_check=True,detector_spec=None,role_model=None,field_cuts=None,snap_known=True,log=lambda *a:None):
     from .automatic import choose_formation
     from .identity import from_video
     from .sam_video import track_boxes
 
-    anchor=choose_formation(boxes,frames,registration,fps,capacity,before=snap)
+    anchor=choose_formation(boxes,frames,registration,fps,capacity,before=snap if snap_known else None,allow_officials=role_check)
+    role_evidence=None
+    if role_check:
+        from .athlete_roles import refine
+        from .registration.local import release
+        try:
+            boxes[anchor],role_evidence=refine(frames[anchor],boxes[anchor],registration,anchor,
+                cache_dir=Path(cache_dir)/"roles",detector_spec=detector_spec,
+                model=role_model,capacity=capacity,field_cuts=field_cuts,log=log)
+        except (RuntimeError,ValueError,OSError) as error:
+            role_evidence={"available":False,"reason":str(error)}
+            log(f"    role check unavailable: {error}")
+        finally:release()
+    if len(boxes[anchor])<6:raise ValueError("too few verified athletes in the automatic formation")
+    if len(boxes[anchor])>capacity*2:
+        raise ValueError("automatic uniform-role verification could not establish a roster within football team capacity")
     # The existing constrained jersey classifier supplies stable team labels.
     # For a cropped formation use upper bounds, never force equal visible counts.
     if len(boxes[anchor])==capacity*2:
@@ -152,12 +168,20 @@ def track(frames,boxes,registration,*,fps,snap,weights,cache_dir,capacity=11,
         roster=initial.roster
     else:
         from .detect.color import kit_color,cluster_teams
+        from .teams import constrained_teams
         samples={str(i):[kit_color(frames[anchor],d)] for i,d in enumerate(boxes[anchor])}
         labels,centers=cluster_teams({k:v for k,v in samples.items() if v[0] is not None})
-        light=int(np.argmax(centers[:,0]))
-        roster={f"p{i:02d}":RosterEntry(id=f"p{i:02d}",team="teamA" if labels.get(str(i))==light else "teamB")
+        centers=centers[np.argsort(-centers[:,0])];probabilities={}
+        for i in range(len(boxes[anchor])):
+            c=samples[str(i)][0];distance=np.linalg.norm(centers-c,axis=1) if c is not None else np.ones(2)
+            probability=np.exp(-distance*distance/(2*35**2));probabilities[str(i)]=probability/probability.sum()
+        labels=constrained_teams(probabilities,[list(probabilities)],capacity=capacity)
+        roster={f"p{i:02d}":RosterEntry(id=f"p{i:02d}",team=labels.get(str(i)) or "unknown")
                 for i in range(len(boxes[anchor]))}
     seeds={pid:[d.x1,d.y1,d.x2,d.y2] for pid,d in zip(roster,boxes[anchor])}
+    evidence=Path(cache_dir).parent/"formation.json"
+    evidence.parent.mkdir(parents=True,exist_ok=True)
+    evidence.write_text(json.dumps({"frame":anchor,"roster":{pid:e.to_json() for pid,e in roster.items()},"boxes":seeds,"roleCheck":role_evidence}))
     log(f"    automatic formation: source {anchor}, {len(roster)} identities")
     tracked=track_boxes(frames,anchor,seeds,fps=fps,weights=weights,cache_dir=cache_dir,log=log)
     if anchor>min(frames):
@@ -188,6 +212,7 @@ def track(frames,boxes,registration,*,fps,snap,weights,cache_dir,capacity=11,
             "sourceBoxes":{str(f):b for f,b in tracked.items()},"backwardChecks":reconciliations,
             "observationChecks":observation_checks,"teamLocked":True,
             "reacquisitionChecks":reacquisitions,
+            "roleCheck":role_evidence,
             "note":"Fixed IDs and teams persist. Hidden poses are absent from observation data and filled explicitly for replay; backward corrections require a matching earlier identity seam."}})
     if jerseys:
         from .jerseys import annotate

@@ -130,6 +130,7 @@ class TrackSpec:
     identity_weights: str = "data/models/sam2.1_t.pt"
     backward_check: bool = True
     jersey_numbers: bool = True
+    role_check: bool = True
 
     gate_yards: float = 2.5
     max_age: int = 8
@@ -153,8 +154,8 @@ class TrackSpec:
     team_clusters: int = 2
     """How many kits to cluster into. Three was used to give the officials a home; it
     splits one team in two instead — 90.8 units of separation at k=2, 69.2 at k=3 on the
-    same samples. The officials cost less as a handful of misassigned tracks than a
-    halved team does."""
+    same samples. Automatic SAM tracking verifies athlete/official roles separately
+    before building the roster."""
 
     max_team_players: int = 11
     """Maximum simultaneously visible players assigned to either team."""

@@ -119,6 +119,10 @@ def prepared(raw: PlayTrack, options: dict | None = None, annotation: dict | Non
             if pid not in out.roster or f is None or pid not in f.players or f.ball is None:
                 report.blockers.append(f"reviewed {key} has no retained pose/ball at {event}; correct identities and rerun")
     report.reviewable = not report.blockers
+    role_check=out.meta.get("identity",{}).get("roleCheck")
+    if role_check and (not role_check.get("available") or role_check.get("overCapacity")):
+        report.blockers.append("automatic athlete/official roster verification is unavailable or over capacity")
+        report.reviewable=False
     out.meta["prepare_report"] = report.to_json()
     clubs = config.get("teamClubs", {})
     for entry in out.roster.values():
@@ -141,6 +145,7 @@ def prepared(raw: PlayTrack, options: dict | None = None, annotation: dict | Non
         "jerseyNumbersFound":sum(e.num is not None for e in out.roster.values()),
         "backwardChecks":len(out.meta.get("identity",{}).get("backwardChecks",[])),
         "reacquisitionChecks":len(out.meta.get("identity",{}).get("reacquisitionChecks",[])),
+        "roleCheck":role_check,
         "verification":out.meta.get("verification",{}),
         "notes":["Same-kit crossings may switch identities; roster size does not establish identity accuracy.",
                  "Unobserved players retain estimated replay positions. Analysis uses original observations; separation estimates may miss off-camera defenders.",

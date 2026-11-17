@@ -54,14 +54,10 @@ def recovery_windows(accepted, masks, detections, fps, maximum=None):
                 if reappeared>=3:
                     finish();seam=frame;lost=False;support=[];last_support=None;misses=0;reappeared=0
         finish()
-    # One repair per identity first, prioritizing an extended clear reacquisition.
-    windows.sort(key=lambda w:(len(w["laterSupportingFrames"]),w["stop"]-w["start"]),reverse=True)
-    chosen=[]
-    for window in windows:
-        if any(w["playerId"]==window["playerId"] for w in chosen):continue
-        chosen.append(window)
-        if maximum is not None and len(chosen)>=maximum:break
-    return chosen
+    # A player can disappear more than once. Repair each independently supported
+    # interval in time order so a second loss is not silently left unexamined.
+    windows.sort(key=lambda w:(w["start"],w["playerId"]))
+    return windows if maximum is None else windows[:maximum]
 
 
 def repair_one(accepted, reverse, pid, start, stop, minimum_iou=.35):

@@ -48,6 +48,9 @@ scikit-learn runtime.
 
 OCR uses Apple Vision on macOS when `swiftc` is available, or optional Tesseract
 (`brew install tesseract`). Jersey OCR can abstain without blocking tracking.
+The local Qwen reader also checks formation crops for players versus officials.
+Its weights are released before SAM starts, and detection automatically uses
+CUDA or Metal when available. An explicit detector device still takes priority.
 Field registration still needs readable field markings and a valid geometry fit.
 Uploaded footage, model downloads, detections and generated videos are local
 artifacts, not in Git.
@@ -81,12 +84,20 @@ window to 20 seconds. It then:
 - Reads field geometry with the local model. When a single view is unreadable,
   OCR can use yard numerals revealed later in the same camera shot, transfer them
   back through image registration, and fit measured paint intersections. An
-  independent paint/turf check must accept the result.
+  additional Apple Vision fallback fits word boxes on both painted number rows
+  when long yard lines are not detected. Labels must agree across two source
+  frames. An independent paint/turf check must accept the result.
 - Finds the set-to-live motion transition for the snap. A clip already in motion
   does not receive a made-up snap.
-- Chooses an early formation from detections and kit colors, then prompts SAM 2
-  video tracking with those boxes. Empty masks keep their original IDs. A probable
-  full formation uses an 11-per-team prior; a partial view permits unequal counts.
+- Chooses an early formation allowing for officials in the initial person count,
+  checks uniform roles locally, and removes officials and sideline personnel.
+  A tiled recheck of that one frame can recover smaller or overlapping athletes;
+  it uses the same sideline cuts and excludes body crops whose feet are outside
+  the image. Uncertain new crops cannot establish another identity. SAM 2 is
+  prompted with the retained athletes. Empty masks keep their original IDs.
+  A probable full formation uses an 11-per-team prior; a partial view permits
+  unequal counts and unknown team labels. No team can gain extra players just
+  to fill a nominal 22-person roster.
 - Traces selected same-team crossings backward from later clear observations.
   Both traces must match the earlier known identities before a swap or gap is
   corrected. Failed matches remain unresolved. These checks are bounded to eight
@@ -95,8 +106,8 @@ window to 20 seconds. It then:
   clearly later, runs SAM backward with **only that player's box**. Three later
   frames must support a unique detector/mask match. The reverse trace must
   reconnect to that same athlete's earlier known box before its missing or wrong
-  positions are repaired. Other player tracks are not rerun. The current pass
-  checks one supported recovery interval per affected identity. Failed checks
+  positions are repaired. Other player tracks are not rerun. Each separately
+  supported disappearance of the same identity is checked in time order. Failed checks
   leave explicit replay estimates, not invented tracking observations.
 - Looks for a moving ball flight and associates its extrapolated image endpoints
   with tracked bodies. At least six real source-frame sightings, fit, motion and
@@ -134,6 +145,19 @@ run, reusing detector/SAM results but computing field calibration, took 269 seco
 These are local measurements, not an upload latency guarantee. Jobs are serialized
 to limit memory use. Longer videos, unfamiliar camera angles, crowded piles,
 missing paint and off-camera athletes remain material limits.
+
+To exercise real upload jobs on additional footage and save JSON, previews and
+roster/recovery audits:
+
+```bash
+python scripts/validate_video_uploads.py --base-url http://localhost:8000 play1.mp4 play2.mp4
+```
+
+The script supplies no calibration, snap, identity or pass annotations. It rejects
+completed jobs without usable tracks as well as roster changes, team changes,
+nonfinite positions, over-capacity rosters and display teleports. These checks
+establish output consistency; footage still needs visual inspection for identity
+accuracy. Reports and downloaded previews are under `data/runs/upload-validation`.
 
 ## Try the examples
 

@@ -583,12 +583,16 @@ def _render_clip(name):
             setattr(obj,key,str(REPO_ROOT/value))
     def progress(*args,**kwargs):
         message=" ".join(str(a) for a in args).strip()
-        if "SAM" in message or "reacquisition" in message:
+        if "SAM" in message or "reacquisition" in message or "automatic formation:" in message:
             _progress("tracking",message)
+        elif "frames," in message or "detections:" in message or "decoded" in message:
+            _progress("detection",message)
         elif "anchor:" in message or "paint calibration:" in message:
             _progress("calibration","Finding the field geometry")
         elif "jerseys:" in message:
             _progress("jerseys",message)
+        elif "role check" in message:
+            _progress("roster",message)
         elif "automatic pass:" in message:
             _progress("ball",message)
     res = rendermod.render(spec, root=RUNS, log=progress)

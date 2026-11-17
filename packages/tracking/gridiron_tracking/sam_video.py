@@ -145,8 +145,7 @@ def track_boxes(frames, anchor, boxes, *, fps, weights, cache_dir, reverse=False
             output[sources[i]]=measured
             if progress:
                 progress(i+1,len(sources))
-            if i%10==0:
-                log(f"    SAM {'backward' if reverse else 'forward'}: {i+1}/{len(sources)} frames")
+            log(f"    SAM {'backward' if reverse else 'forward'}: {i+1}/{len(sources)} frames")
         target.write_text(json.dumps({"input":payload,"boxes":output}))
     finally:
         video.unlink(missing_ok=True)

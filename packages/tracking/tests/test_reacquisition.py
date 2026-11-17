@@ -67,6 +67,24 @@ def test_reverse_track_cannot_duplicate_a_body_already_assigned_to_another_ident
     assert "a" not in accepted[9] and accepted[9]["b"]==box(50)
 
 
+def test_each_separate_loss_of_the_same_player_is_recovered(tmp_path):
+    accepted,masks,bodies=fixture()
+    for f in range(45,91,3):
+        masks[f]={"a":box(f/10),"b":box(50)}
+        accepted[f]=deepcopy(masks[f])
+        bodies[f]=[Detection(frame=f,x1=b[0],y1=b[1],x2=b[2],y2=b[3],score=.95)
+            for b in masks[f].values()]
+    for f in range(54,72,3):accepted[f].pop("a")
+    calls=[]
+    def backward(frames,anchor,prompts,**kwargs):
+        calls.append((kwargs["stop"],anchor))
+        assert list(prompts)==["a"]
+        return {f:{"a":p["a"]} for f,p in masks.items() if kwargs["stop"]<=f<=anchor}
+    results=recover(accepted,masks,bodies,{},fps=30,weights="unused",cache_dir=tmp_path,tracker=backward)
+    assert len(calls)==2 and all(r["accepted"] for r in results)
+    assert all("a" in accepted[f] for f in list(range(9,27,3))+list(range(54,72,3)))
+
+
 def test_real_automatic_fixture_recovers_the_defender_near_the_passer():
     from gridiron_tracking.contract import PlayTrack
     from gridiron_tracking.video_play import play_json

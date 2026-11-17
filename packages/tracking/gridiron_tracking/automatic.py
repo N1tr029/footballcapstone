@@ -54,7 +54,7 @@ def snap_from_positions(points, fps):
     return SnapEstimate(None,0.,"no sustained set-to-live transition found")
 
 
-def choose_formation(boxes, frames, registration, fps, capacity=11, before=None):
+def choose_formation(boxes, frames, registration, fps, capacity=11, before=None,allow_officials=False):
     """Choose the richest clear early formation; do not demand an invented 11/11.
 
     A full roster is a candidate inferred from detections and jersey separation,
@@ -64,7 +64,11 @@ def choose_formation(boxes, frames, registration, fps, capacity=11, before=None)
     first=min(frames);end=min(first+2*fps,before) if before is not None else first+2*fps
     candidates=[]
     for frame,detections in boxes.items():
-        if frame>end or not 8<=len(detections)<=capacity*2:
+        # Before uniform roles have been checked, a full formation can contain
+        # 22 athletes plus officials. Rejecting every >22-person view selects a
+        # worse frame with missing athletes simply because its total is 22.
+        extra=7 if allow_officials else 0
+        if frame>end or not 8<=len(detections)<=capacity*2+extra:
             continue
         colors={str(i):[c] for i,d in enumerate(detections) if (c:=kit_color(frames[frame],d)) is not None}
         if len(colors)<len(detections)*.8:
@@ -79,7 +83,7 @@ def choose_formation(boxes, frames, registration, fps, capacity=11, before=None)
         # At a probable full formation an occluded torso can put one athlete in
         # the other colour cluster. Treat 11/11 as a soft roster prior, not a
         # requirement that a cropped frame must satisfy.
-        limit=capacity+2 if len(detections)==capacity*2 else capacity
+        limit=capacity+extra if allow_officials else capacity+2 if len(detections)==capacity*2 else capacity
         if max(counts)>limit or min(counts)<3:
             continue
         score=len(detections)*2+np.mean([d.score for d in detections])

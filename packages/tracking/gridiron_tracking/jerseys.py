@@ -14,6 +14,7 @@ import sys
 import json
 import base64
 import hashlib
+import tempfile
 from pathlib import Path
 
 
@@ -43,7 +44,8 @@ def native_binary(cache_dir):
     binary=cache/f"jersey-ocr-{key}"
     if not binary.is_file():
         try:
-            result=subprocess.run([shutil.which("swiftc"),"-O","-module-cache-path",str(cache/"swift-modules"),
+            modules=Path(tempfile.gettempdir())/"gridiron-swift-modules"
+            result=subprocess.run([shutil.which("swiftc"),"-O","-module-cache-path",str(modules),
                 str(source),"-o",str(binary)],capture_output=True,timeout=90,check=False)
         except (OSError,subprocess.TimeoutExpired):
             return None

@@ -285,6 +285,9 @@ def _anchor(spec: ClipSpec, frames, n_src: int, out_dir: Path, force: set, log,b
             rects={f:[[d.x1,d.y1,d.x2,d.y2] for d in ds] for f,ds in (boxes or {}).items()}
             hint=spec.register.level or (getattr(auto.reading,"level",None) if auto.reading else None)
             fallback=calibrate(frames,rects,fps=fps,cache_dir=out_dir/"paint-ocr",level=hint,log=log)
+            if fallback is None:
+                from .registration.word_calibration import calibrate as word_calibrate
+                fallback=word_calibrate(frames,rects,fps=fps,cache_dir=out_dir/"paint-ocr",level=hint,log=log)
             if fallback:
                 auto=fallback;fi=fallback.frame
         log(f"      {auto.summary()}")
@@ -902,6 +905,8 @@ def render(spec: ClipSpec, root: Path = RUN_DIR, force=(), log=print) -> RenderR
 
     base, field_spec, reg_stage, reg_problems, prop = _register(
         spec, frames, n_src, out_dir, force, log, boxes=boxes)
+    from .registration.local import release
+    if base is None or spec.track.identity_mode!="sam2" or not spec.track.role_check or spec.track.full_roster_frame is not None:release()
     res.stages["register"] = reg_stage + ("+propagated" if prop is not None else "")
     res.problems.extend(reg_problems)
     if base is None:
@@ -972,11 +977,15 @@ def render(spec: ClipSpec, root: Path = RUN_DIR, force=(), log=print) -> RenderR
     fixed_roster = spec.track.full_roster_frame is not None or automatic_identity
     if automatic_identity:
         from .auto_identity import track as automatic_track
-        out.track = automatic_track(frames,boxes,src_reg,fps=fps,
-            snap=spec.snap_frame if spec.snap_frame is not None else ordered[0],
-            weights=spec.track.identity_weights,cache_dir=out_dir/"identity-cache",
-            capacity=spec.track.max_team_players,backward=spec.track.backward_check,
-            jerseys=spec.track.jersey_numbers,log=log)
+        try:
+            out.track = automatic_track(frames,boxes,src_reg,fps=fps,
+                snap=spec.snap_frame if spec.snap_frame is not None else ordered[0],
+                weights=spec.track.identity_weights,cache_dir=out_dir/"identity-cache",
+                capacity=spec.track.max_team_players,backward=spec.track.backward_check,
+                snap_known=spec.snap_frame is not None,
+                jerseys=spec.track.jersey_numbers,role_check=spec.track.role_check,
+                detector_spec=spec.detect,role_model=spec.register.model if (spec.register.model or "").startswith("mlx:") else None,field_cuts=cuts,log=log)
+        finally:release()
         out.tracks_born=out.tracks_kept=len(out.track.roster)
         if spec.snap_frame is None:
             for f in out.track.frames:

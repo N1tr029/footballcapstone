@@ -43,6 +43,15 @@ def test_sparse_video_is_replayable_but_not_model_ready():
     assert {p["club"] for p in doc["players"]} == {"SF","SEA"}
 
 
+@pytest.mark.parametrize("evidence",[{"available":False},{"available":True,"overCapacity":2}])
+def test_roster_verification_failure_blocks_model_even_when_pass_evidence_exists(evidence):
+    raw=video_track();raw.meta["identity"]={"roleCheck":evidence}
+    doc=play_json(raw,annotation=ANNOTATION)
+    assert not doc["analysisReady"]
+    assert any("roster verification" in reason for reason in doc["analysisBlockers"])
+    assert doc["trackingQuality"]["roleCheck"]==evidence
+
+
 def test_review_preserves_evidence_and_publishes_carriers_and_both_catch_events():
     raw = video_track(); before = deepcopy(raw.to_json())
     doc = play_json(raw,annotation=ANNOTATION)

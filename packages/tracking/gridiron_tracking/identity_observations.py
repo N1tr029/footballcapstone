@@ -36,13 +36,14 @@ def reconcile(tracked, detections, registration, roster, anchor, fps):
                 dt=(frame-seen[pid])/fps;gap=abs(dt)
                 prediction=last[pid]+velocity[pid]*np.clip(dt,-.5,.5)
                 mask=masks.get(pid);wrong_mask=False
+                known_team=expected.get(teams[pid])
                 if mask is not None and boxes:
                     overlaps=[iou(mask,b) for b in boxes];best=int(np.argmax(overlaps))
-                    wrong_mask=overlaps[best]>.3 and bodies[best].team is not None and bodies[best].team!=expected.get(teams[pid])
+                    wrong_mask=known_team is not None and overlaps[best]>.3 and bodies[best].team is not None and bodies[best].team!=known_team
                     if wrong_mask:
                         counts["opponentMasksRejected"]+=1
                 for j,(body,box,point) in enumerate(zip(bodies,boxes,coords)):
-                    if body.team is not None and body.team!=expected.get(teams[pid]):
+                    if known_team is not None and body.team is not None and body.team!=known_team:
                         continue
                     if not np.isfinite(point).all():
                         continue

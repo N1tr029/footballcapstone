@@ -26,6 +26,32 @@ def test_snap_comes_from_common_motion_without_annotated_frame():
     assert snap_from_positions(moving,30).frame is None
 
 
+def test_formation_selection_allows_officials_before_uniform_roles_are_checked(monkeypatch):
+    from gridiron_tracking.automatic import choose_formation
+    from gridiron_tracking.detect import Detection,color
+    monkeypatch.setattr(color,"kit_color",lambda image,d:np.array([d.x1,0.,0.]))
+    monkeypatch.setattr(color,"cluster_teams",lambda samples:({k:int(v[0][0]>10) for k,v in samples.items()},
+        np.array([[0.,0.,0.],[100.,0.,0.]])))
+    def people(n):
+        return [Detection(frame=0,x1=0 if j<11 else 100,y1=0,x2=105,y2=10,score=.9) for j in range(n)]
+    boxes={0:people(25),1:people(22)};frames={f:np.zeros((20,20,3),np.uint8) for f in boxes}
+    assert choose_formation(boxes,frames,None,30,allow_officials=True)==0
+    assert choose_formation(boxes,frames,None,30,allow_officials=False)==1
+
+
+def test_failed_uniform_reader_cannot_publish_25_people_as_players(monkeypatch,tmp_path):
+    from gridiron_tracking import automatic,athlete_roles,auto_identity
+    from gridiron_tracking.registration import local
+    monkeypatch.setattr(automatic,"choose_formation",lambda *a,**k:0)
+    def unavailable(*args,**kwargs):raise RuntimeError("model not installed")
+    monkeypatch.setattr(athlete_roles,"refine",unavailable);released=[]
+    monkeypatch.setattr(local,"release",lambda:released.append(True))
+    with pytest.raises(ValueError,match="team capacity"):
+        auto_identity.track({0:np.zeros((20,20,3),np.uint8)},{0:[object()]*25},None,
+            fps=30,snap=0,weights="unused",cache_dir=tmp_path)
+    assert released==[True]
+
+
 def box(x):
     return [x,0,x+4,10]
 

@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import json
 import os
+import gc
+import sys
 from functools import lru_cache
 from pathlib import Path
 from threading import Lock
@@ -17,6 +19,16 @@ from ..config import load_env
 DEFAULT_MODEL = "mlx-community/Qwen3.5-9B-4bit"
 MODEL_FILES = ["*.safetensors", "*.json", "*.txt", "*.jinja"]
 _lock = Lock()
+
+
+def release():
+    """Free the field reader before loading the video tracker on shared memory."""
+    with _lock:
+        _load.cache_clear()
+        _constraint_tokenizer.cache_clear()
+        gc.collect()
+        if (mx:=sys.modules.get("mlx.core")) is not None:
+            mx.clear_cache()
 
 
 def cache_dir() -> Path:

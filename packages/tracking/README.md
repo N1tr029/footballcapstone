@@ -278,6 +278,13 @@ selected teammate crossings. A correction requires both backward traces to match
 the earlier known identities; a failed match is left unresolved. Jersey OCR also
 samples later frames, accepting a number only after three source frames agree.
 
+Individual reacquisition now has its own reverse pass. When later clear frames
+recover a lost identity, only that athlete is prompted in SAM and tracked backward
+through the affected interval. The trace must reconnect to the same earlier
+identity before its missing/wrong samples are replaced. Other player trackers are
+not rerun. `meta.identity.reacquisitionChecks` records the evidence and decisions;
+display interpolation remains the fallback if the video cannot support recovery.
+
 Field calibration can transfer later readable yard numerals to an earlier view of
 the same camera through image registration. The fit must pass paint/turf checks.
 Ball events use actual moving-flight sightings and image-space body association;

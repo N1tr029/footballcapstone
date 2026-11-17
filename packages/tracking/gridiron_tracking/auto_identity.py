@@ -172,15 +172,22 @@ def track(frames,boxes,registration,*,fps,snap,weights,cache_dir,capacity=11,
             result=reconcile_window(tracked,reverse,start,stop,pids)
             reconciliations.append({**window,**result})
     from .identity_observations import reconcile
+    original_masks=tracked
     tracked,observation_checks=reconcile(tracked,boxes,registration,roster,anchor,fps)
     log(f"    identity observations: {observation_checks}")
+    reacquisitions=[]
+    if backward:
+        from .reacquisition import recover
+        reacquisitions=recover(tracked,original_masks,boxes,frames,fps=fps,weights=weights,
+            cache_dir=cache_dir,log=log)
     out=PlayTrack(roster=roster,frames=resample(roster,tracked,registration,fps=fps,snap=snap,
         first=min(frames),last=max(frames)),meta={"source":"vision","rate":10,"fps_in":fps,
-        "identity":{"method":"automatic detector-seeded SAM 2 with backward crossing checks",
+        "identity":{"method":"automatic detector-seeded SAM 2 with backward crossing and single-player reacquisition checks",
             "automatic":True,"anchorSourceFrame":anchor,"rosterSize":len(roster),
             "newIdentitiesAfterAnchor":0,"operatorAnchors":[],
             "sourceBoxes":{str(f):b for f,b in tracked.items()},"backwardChecks":reconciliations,
             "observationChecks":observation_checks,"teamLocked":True,
+            "reacquisitionChecks":reacquisitions,
             "note":"Fixed IDs and teams persist. Hidden poses are absent from observation data and filled explicitly for replay; backward corrections require a matching earlier identity seam."}})
     if jerseys:
         from .jerseys import annotate

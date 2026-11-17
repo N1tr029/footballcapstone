@@ -91,6 +91,13 @@ window to 20 seconds. It then:
   Both traces must match the earlier known identities before a swap or gap is
   corrected. Failed matches remain unresolved. These checks are bounded to eight
   crossings per clip; they do not recover every occlusion or unseen entrant.
+- When an individual identity is lost or drifts onto another body and is found
+  clearly later, runs SAM backward with **only that player's box**. Three later
+  frames must support a unique detector/mask match. The reverse trace must
+  reconnect to that same athlete's earlier known box before its missing or wrong
+  positions are repaired. Other player tracks are not rerun. The current pass
+  checks one supported recovery interval per affected identity. Failed checks
+  leave explicit replay estimates, not invented tracking observations.
 - Looks for a moving ball flight and associates its extrapolated image endpoints
   with tracked bodies. At least six real source-frame sightings, fit, motion and
   endpoint checks are required. Accepted endpoints produce `pass_forward` and
@@ -153,11 +160,11 @@ The committed [automatic play JSON](examples/nfl_sf_sea_auto.play.json) and
   identity accuracy for other footage.
 - No jersey numbers passed temporal consensus on this broadcast. They remain
   unknown instead of being assigned guesses.
-- The real play model runs on 12 recently observed players at release and returns
+- The real play model runs on 13 recently observed players at release and returns
   a low-confidence video recommendation. Missing defenders still affect it.
 
 These are results on one clip, not a broad accuracy benchmark. Detector agreement
-is about 97.8% after exclusive body matching (previously 81.5%); that measures
+is about 97.5% after exclusive body matching and individual recovery (previously 81.5%); that measures
 geometry overlap, not identity correctness. A fixed roster
 does not establish 22 continuously accurate trajectories.
 
@@ -340,6 +347,12 @@ not synchronized ground-truth tracking.
   errors, heuristic confidence score and unknown outcome. Its score is not a
   calibrated probability. `provenance.identity.backwardChecks` records each seam
   decision and any actual edits.
+- `provenance.identity.reacquisitionChecks` records each single-player backward
+  pass: player ID, earlier/later source frames, supporting later sightings, seam
+  agreement, recovered/corrected frames and any rejection reason. The
+  `trackingQuality.reacquisitionChecks` count is separate from paired crossing
+  checks. This recovers observations from video rather than merely filling a
+  display path between two points.
 - `replayRosterStable`, `replayPlayersPerFrame` and `replayEstimatedSamples` describe
   continuous replay membership. `ballFrames`/`ballSources` describe replay output;
   `analysisBallFrames`/`analysisBallSources` retain the counts before display

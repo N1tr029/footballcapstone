@@ -140,6 +140,7 @@ def prepared(raw: PlayTrack, options: dict | None = None, annotation: dict | Non
         "identityAutomatic":bool(out.meta.get("identity",{}).get("automatic")),
         "jerseyNumbersFound":sum(e.num is not None for e in out.roster.values()),
         "backwardChecks":len(out.meta.get("identity",{}).get("backwardChecks",[])),
+        "reacquisitionChecks":len(out.meta.get("identity",{}).get("reacquisitionChecks",[])),
         "verification":out.meta.get("verification",{}),
         "notes":["Same-kit crossings may switch identities; roster size does not establish identity accuracy.",
                  "Unobserved players retain estimated replay positions. Analysis uses original observations; separation estimates may miss off-camera defenders.",

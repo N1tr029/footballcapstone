@@ -583,7 +583,7 @@ def _render_clip(name):
             setattr(obj,key,str(REPO_ROOT/value))
     def progress(*args,**kwargs):
         message=" ".join(str(a) for a in args).strip()
-        if "SAM" in message:
+        if "SAM" in message or "reacquisition" in message:
             _progress("tracking",message)
         elif "anchor:" in message or "paint calibration:" in message:
             _progress("calibration","Finding the field geometry")

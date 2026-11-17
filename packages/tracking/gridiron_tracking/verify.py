@@ -503,14 +503,11 @@ def side_by_side(
                        observation["field"] if observation and not assisted else
                        ([f.ball.x, f.ball.y] if f.ball is not None and not ball_observations else None))
             if ball_xy is not None:
-                seen = ball_seen_at(f.t) if callable(ball_seen_at) else True
-                if observation:
-                    seen = True
-                if assisted:
-                    seen = False
-                cv2.circle(right, (sx(ball_xy[0]), sy(ball_xy[1])), 9, (25, 35, 55), -1, cv2.LINE_AA)
-                cv2.circle(right, (sx(ball_xy[0]), sy(ball_xy[1])), 6,
-                           (235, 245, 250) if seen else (120, 185, 215), -1, cv2.LINE_AA)
+                center=(sx(ball_xy[0]),sy(ball_xy[1]))
+                cv2.ellipse(right,center,(11,7),-25,0,360,(30,40,60),-1,cv2.LINE_AA)
+                cv2.ellipse(right,center,(9,5),-25,0,360,(40,75,125),-1,cv2.LINE_AA)
+                cv2.line(right,(center[0]-3,center[1]+1),(center[0]+3,center[1]-1),
+                         (220,225,235),1,cv2.LINE_AA)
             label(right, [
                 "THE RECREATION, same instant, seen from above",
                 f"t {f.t:+.1f}s   {len(shown.players)} roster players   solid = tracked, hollow = estimated",

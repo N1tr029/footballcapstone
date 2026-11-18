@@ -19,6 +19,7 @@ invariants alone do not establish identity accuracy.
 | Footage | Retained IDs / replay frames | Observed / estimated player samples | Accepted individual backward checks | Missing / drifted source samples repaired |
 | --- | --- | --- | --- | --- |
 | Northwestern / Michigan | 21 / 65 | 1,095 / 270 | 9 of 9 | 69 / 11 |
+| Oregon / Washington State | 19 / 62 | 841 / 337 | 6 of 6 | 20 / 1 |
 
 Northwestern retains the same 21 IDs on every replay frame: 11 in one kit, nine
 in the other and one unknown. The maximum display step is 1.202 yards at 10 Hz;
@@ -43,6 +44,39 @@ The portable [raw track](examples/nw_michigan_auto.track.json) and
 outputs, with per-source pixel boxes omitted from the committed fixture for size.
 The frontend can fetch `/video/examples/nw_michigan_auto/tracking` without running
 models or downloading source footage.
+
+Oregon retains 19 IDs on every frame, eight in one kit and 11 in the other. Its
+maximum display step is 1.204 yards at 10 Hz, with no consistency-audit issues.
+Six one-player backward checks reconnect to their earlier seams, including three
+separate repairs for `p00`. Five officials and one other person are excluded from
+the initial formation. An over-capacity tiled alternative is rejected rather
+than used to invent a complete roster. The uploaded video is 59.94 fps, so this
+also exercises source-frame conversion at a different input rate. Its ball poses
+are 15 carrier estimates; there is no accepted flight or pass review readiness.
+The [raw track](examples/oregon_wsu_auto.track.json) and
+[play JSON](examples/oregon_wsu_auto.play.json) are available through
+`/video/examples/oregon_wsu_auto/tracking`.
+
+## Views still rejected automatically
+
+| Uploaded footage | Result |
+| --- | --- |
+| Milton touchdown, low night-game camera | Field shot selected, but no accepted calibration; no yard-coordinate track published. |
+| Devin Singletary, low stadium camera | Field shot selected, but no accepted calibration; no yard-coordinate track published. |
+| Obstructed spectator clip | No playable field shot found; the job returns a clear failure. |
+
+The two low-camera clips return `hasTrack:false` with calibration problems.
+Their original selector scores were zero; after the field-region fix, their
+scores are 0.452 and 0.895 respectively. Recognizing a field shot does not by
+itself establish where its yard coordinates lie. The obstructed view remains
+rejected. The validation harness exits nonzero for these rejected inputs, as
+intended; job completion alone is not counted as tracking success.
+
+An additional local-reader check removes the stands using the detected turf
+horizon and samples the first, middle and last image of each low-camera clip.
+All six field crops still produce zero usable landmarks/correspondences. Cropping
+therefore does not resolve these two calibration failures. No permissive fit or
+pixel-to-yard substitution is published for them.
 
 ## Failures fixed during these runs
 

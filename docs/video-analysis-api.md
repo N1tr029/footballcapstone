@@ -73,6 +73,11 @@ Poll the returned `analysisJobId`. A completed job has
 `progress.stage` and `progress.message` describe the current stage while running.
 Join returned asset paths to the API origin.
 
+If `state` is `failed`, display the job's `error`. A `done` job can still contain
+candidates with `hasTrack:false` and explanatory `problems` when field geometry
+cannot be established. A usable replay and a model-ready pass are separate
+outcomes; check `analysisReady` before requesting a review.
+
 `POST /video/{videoId}/analyze` starts another automatic job for an existing upload.
 Use multipart `autoAnalyze=false` to upload without analysis and use the optional
 assisted endpoints below. A job completing does not imply every candidate is
@@ -205,6 +210,13 @@ One kit remains unknown. This clip has no accepted ball flight and remains
 `analysisReady:false`; successful player recovery does not establish pass events.
 The [raw track](examples/nw_michigan_auto.track.json) and
 [play JSON](examples/nw_michigan_auto.play.json) are genuine automatic outputs.
+
+`/video/examples/oregon_wsu_auto/tracking` provides another automatic result:
+19 stable IDs on 62 replay frames, six accepted individual reverse checks,
+20 missing source samples recovered and one drifted sample corrected. It also
+withholds pass review because no ball flight is established. See the
+[multi-clip validation report](video-upload-validation.md) for test conditions,
+observed versus estimated sample counts and remaining limits.
 
 The older assisted example remains available for comparison:
 

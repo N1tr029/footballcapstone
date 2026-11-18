@@ -293,3 +293,45 @@ def test_a_measured_play_does_not_become_simulated_by_round_tripping():
     back = hindsight.read_play(hindsight.to_play_json(track))
     assert back.meta["simulated"] is False
     assert back.meta["source"] == "ngs"
+
+
+def test_how_the_ball_was_arrived_at_survives_the_export():
+    """A measured ball and an attributed one must not reach the client identically.
+
+    ``ball.py`` reports three ways a frame can have a ball on it and warns that a
+    renderer drawing them alike is lying about two of them. That warning is only
+    worth anything if the distinction survives to the renderer, and the document is
+    where it was being dropped: the contract's Ball carried x and y and nothing
+    about where they came from, so a position interpolated from whoever possession
+    said was carrying it arrived looking exactly like a sighting.
+
+    ``dataOrigin`` is the field the API already serves for a ball that came from the
+    play model, so a client has one place to look whatever produced the play.
+    """
+    track = hindsight.read_play(some_plays(1)[0])
+    sources = ["detected", "coasted", "carrier"]
+    for i, f in enumerate(track.frames):
+        if f.ball is not None:
+            f.ball.source = sources[i % len(sources)]
+
+    doc = hindsight.to_play_json(track)
+    seen = {f["ball"]["dataOrigin"] for f in doc["frames"] if "ball" in f}
+    assert seen == set(sources), seen
+
+
+def test_a_ball_that_does_not_say_where_it_came_from_claims_nothing():
+    """Absent, not defaulted to 'detected'.
+
+    The exporter that wrote the committed plays predates the field, so most plays
+    in the tree have no source on any frame. Filling one in would turn 'nobody
+    said' into 'it was measured', which is the one direction this must not round.
+    """
+    track = hindsight.read_play(some_plays(1)[0])
+    for f in track.frames:
+        if f.ball is not None:
+            f.ball.source = None
+
+    doc = hindsight.to_play_json(track)
+    balls = [f["ball"] for f in doc["frames"] if "ball" in f]
+    assert balls, "this play has no ball to check"
+    assert not any("dataOrigin" in b for b in balls)

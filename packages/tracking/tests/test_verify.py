@@ -97,6 +97,26 @@ def test_side_by_side_writes_a_playable_file(tmp_path):
         "both panels must be stacked, separated by the hairline rule"
 
 
+def test_video_preserves_duration_when_output_and_tracking_rates_differ(tmp_path):
+    import cv2
+    from gridiron_tracking import field as F
+
+    cam = sideline_camera(image_size=(320, 180), height=30.0, y=-40.0)
+    track = _track(n=10, players=1)
+    for i, frame in enumerate(track.frames):
+        frame.players["p0"].x = 40 + i
+    frames = {i: np.zeros((180, 320, 3), np.uint8) for i in range(30)}
+    out = VER.side_by_side(tmp_path / "timed.mp4", track, _Reg(cam), frames, {},
+                           spec=F.NFL, fps=30, out_fps=12)
+    cap = cv2.VideoCapture(str(out))
+    assert cap.get(cv2.CAP_PROP_FRAME_COUNT) == 12
+    assert cap.get(cv2.CAP_PROP_FPS) == 12
+    cap.release()
+    between = VER._render_frame_at(track, 0.05)
+    assert between.players["p0"].x == pytest.approx(40.5)
+    assert track.frames[0].players["p0"].x == 40
+
+
 def _two_tracks_on_one_body(n=10):
     """Two ids on one man — the defect the old scorer counted twice as a success."""
     roster = {"p0": RosterEntry(id="p0", team="offense"),

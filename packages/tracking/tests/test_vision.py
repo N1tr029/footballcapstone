@@ -24,6 +24,12 @@ def test_the_schema_always_offers_a_way_to_say_i_cannot_tell():
     assert r["down_marker_number"].default is None
 
 
+@pytest.mark.parametrize("point", [0.5, [0.5], [0.1, 0.2, 0.3]])
+def test_landmark_endpoints_require_two_coordinates(point):
+    with pytest.raises(ValueError):
+        V.Landmark(kind="far_sideline", p1=point, p2=[0.9, 0.1], confidence="probable")
+
+
 def test_the_prompt_asks_for_structure_before_numbers():
     """Tested on a real night game, not one painted number was legible while the
     sidelines and end zone were obvious. Structure has to come first."""
@@ -140,3 +146,345 @@ def test_turf_overlap_rejects_a_fit_that_left_the_field():
 
     assert on_grass > off_grass, (on_grass, off_grass)
     assert off_grass < 0.75, "a field projected into the crowd must fail the bar"
+
+
+# --------------------------------------------------------- retrying and failing over
+# The failure that cost a whole clip was not a bad reading, it was a busy endpoint:
+# nine of nine anchor frames on a 1080p NFL broadcast died to 503s and truncated
+# answers. These pin the policy that fixed it, without making a call.
+
+
+def _reader(monkeypatch, answers):
+    """Drive _ask with a scripted sequence of per-model answers.
+
+    ``answers`` maps a model name to a list of VisionResults to return in order;
+    a model missing from it keeps returning its last answer.
+    """
+    seen = []
+
+    def fake(client, img, prompt, schema, max_tokens, model, **extra):
+        seen.append(model)
+        queue = answers.get(model) or [V.VisionResult(None, "", "ClientError: 404 NOT_FOUND")]
+        return queue.pop(0) if len(queue) > 1 else queue[0]
+
+    monkeypatch.setattr(V, "_ask_once", fake)
+    monkeypatch.setattr(V, "_nap", lambda s: None)
+    return seen
+
+
+def test_a_busy_model_is_asked_again_rather_than_given_up_on(monkeypatch):
+    busy = V.VisionResult(None, "", "ServerError: 503 UNAVAILABLE high demand")
+    good = V.VisionResult(object(), "{}")
+    seen = _reader(monkeypatch, {"m": [busy, busy, good]})
+
+    res = V._ask(None, None, "p", V.FieldReading, model="m", model_chain=())
+    assert res.reading is not None
+    assert seen == ["m", "m", "m"]
+
+
+def test_a_model_that_stays_busy_falls_back_to_its_sibling(monkeypatch):
+    busy = V.VisionResult(None, "", "ServerError: 503 UNAVAILABLE")
+    good = V.VisionResult(object(), "{}")
+    seen = _reader(monkeypatch, {"m": [busy], "sib": [good]})
+
+    res = V._ask(None, None, "p", V.FieldReading, model="m", model_chain=("sib",))
+    assert res.reading is not None
+    assert seen == ["m", "m", "m", "sib"]
+
+
+def test_a_permanent_failure_is_not_retried_on_the_same_model(monkeypatch):
+    """A 404 will still be a 404 in two seconds. The sibling is still worth a try."""
+    gone = V.VisionResult(None, "", "ClientError: 404 NOT_FOUND")
+    good = V.VisionResult(object(), "{}")
+    seen = _reader(monkeypatch, {"m": [gone], "sib": [good]})
+
+    res = V._ask(None, None, "p", V.FieldReading, model="m", model_chain=("sib",))
+    assert res.reading is not None
+    assert seen == ["m", "sib"]
+
+
+def test_when_everything_fails_the_last_real_diagnosis_survives(monkeypatch):
+    """Not a generic 'registration failed' — the caller has to be able to tell a busy
+    endpoint from a missing key from a frame with no field in it."""
+    _reader(monkeypatch, {
+        "m": [V.VisionResult(None, "", "ServerError: 503 UNAVAILABLE")],
+        "sib": [V.VisionResult(None, "", "GEMINI_API_KEY is not set")],
+    })
+    res = V._ask(None, None, "p", V.FieldReading, model="m", model_chain=("sib",))
+    assert res.reading is None
+    assert "GEMINI_API_KEY is not set" in res.error
+
+
+def test_transient_and_permanent_are_told_apart():
+    assert V._is_transient("ServerError: 503 UNAVAILABLE")
+    assert V._is_transient("429 rate limit exceeded")
+    assert V._is_transient("this model is currently experiencing high demand")
+    assert not V._is_transient("ClientError: 404 NOT_FOUND")
+    assert not V._is_transient("GEMINI_API_KEY is not set")
+    assert not V._is_transient("the model declined this request")
+
+
+def test_running_out_of_output_budget_is_reported_as_itself():
+    """It arrived as a JSONDecodeError, which reads like a prompt problem. It was a
+    thinking model spending the answer's token budget on thinking."""
+    class Resp:
+        candidates = [type("C", (), {"finish_reason": "MAX_TOKENS"})()]
+
+    assert V._hit_the_token_cap(Resp())
+    assert not V._hit_the_token_cap(type("R", (), {"candidates": []})())
+
+
+def test_every_backend_has_a_name_that_routes_to_it():
+    assert V.backend_for(V.GEMINI_MODEL) == "gemini"
+    assert V.backend_for(V.QWEN_MODEL) == "qwen"
+    assert V.backend_for(V.MODEL) == "mlx"
+    assert V.backend_for("claude-opus-5") == "anthropic"
+
+
+def test_local_read_and_verification_need_no_cloud_credentials(monkeypatch):
+    import json
+    from gridiron_tracking.registration import local
+
+    monkeypatch.delenv("FOOTBALL_VISION_MODEL", raising=False)
+    monkeypatch.setattr(V, "_client", lambda *a: pytest.fail("constructed a cloud client"))
+    seen = []
+
+    def generate(img, system, prompt, schema, *, model, max_tokens):
+        seen.append(model)
+        data = (_reading([(40, 0.27), (30, 0.68)]).model_dump()
+                if schema["title"] == "FieldReading"
+                else {"verdict": "good", "problem": ""})
+        return json.dumps(data), 100
+
+    monkeypatch.setattr(local, "generate_json", generate)
+    img = np.zeros((32, 32, 3), np.uint8)
+    read = V.read_field(img)
+    check = V.check_fit(img)
+    assert [n.number for n in read.reading.yard_numbers] == [40, 30]
+    assert check.reading.verdict == "good"
+    assert seen == [V.MODEL.removeprefix("mlx:")] * 2
+
+
+@pytest.mark.parametrize("answer,tokens,expected_error", [
+    ('{"verdict":"good","problem":""}', 5, None),
+    ('```json\n{"verdict":"good","problem":""}\n```', 5, None),
+    ('{"verdict":"good"}', 5, "could not parse"),
+    ('{"verdict":', 20, "truncated"),
+])
+def test_local_answers_must_be_complete_and_match_the_schema(
+        monkeypatch, answer, tokens, expected_error):
+    from gridiron_tracking.registration import local
+
+    monkeypatch.setattr(local, "generate_json", lambda *a, **kw: (answer, tokens))
+    res = V._ask_mlx(None, "p", V.FitCheck, model=V.MODEL, max_tokens=20)
+    if expected_error:
+        assert res.reading is None
+        assert expected_error in res.error
+    else:
+        assert res.error is None
+        assert res.reading.verdict == "good"
+
+
+def test_local_inference_reuses_offline_weights_and_preserves_image_colors(monkeypatch, tmp_path):
+    import sys
+    from types import SimpleNamespace
+    from gridiron_tracking.registration import local
+
+    monkeypatch.setattr(local, "load_env", lambda: [])
+
+    downloads, loads, images = [], [], []
+
+    def snapshot(model, **kwargs):
+        downloads.append(kwargs)
+        return str(tmp_path)
+
+    def load(path, **kwargs):
+        loads.append(path)
+        return object(), object()
+
+    def generate(model, processor, prompt, *, image, **kwargs):
+        images.append(image[0].getpixel((0, 0)))
+        return SimpleNamespace(text='{"verdict":"good","problem":""}', generation_tokens=12)
+
+    monkeypatch.setitem(sys.modules, "huggingface_hub", SimpleNamespace(snapshot_download=snapshot))
+    monkeypatch.setitem(sys.modules, "mlx_vlm", SimpleNamespace(load=load, generate=generate))
+    monkeypatch.setitem(sys.modules, "mlx_vlm.utils",
+                        SimpleNamespace(load_config=lambda path: {"model_type": "qwen3_vl"}))
+    monkeypatch.setitem(sys.modules, "mlx_vlm.prompt_utils",
+                        SimpleNamespace(apply_chat_template=lambda *a, **kw: "formatted prompt"))
+    core = SimpleNamespace(set_cache_limit=lambda size: None)
+    monkeypatch.setitem(sys.modules, "mlx", SimpleNamespace(core=core))
+    monkeypatch.setitem(sys.modules, "mlx.core", core)
+    monkeypatch.setattr(local, "_json_processor", lambda *a: object())
+    local._load.cache_clear()
+    try:
+        blue_bgr = np.array([[[255, 0, 0]]], dtype=np.uint8)
+        for _ in range(2):
+            local.generate_json(blue_bgr, "system", "prompt", {}, model="test/model")
+        assert len(loads) == len(downloads) == 1
+        assert downloads[0]["local_files_only"] is True
+        # Cache lookup must use the same selection as download: HF otherwise
+        # rejects the snapshot because deliberately omitted README files are absent.
+        assert downloads[0]["allow_patterns"] == local.MODEL_FILES
+        assert images == [(0, 0, 255), (0, 0, 255)]
+    finally:
+        local._load.cache_clear()
+
+
+@pytest.mark.parametrize("has_weights", [False, True])
+def test_reusing_a_model_cache_requires_weights_not_just_metadata(monkeypatch, tmp_path, has_weights):
+    from gridiron_tracking.registration import local
+
+    model_dir = tmp_path / "Example-4bit"
+    model_dir.mkdir()
+    (model_dir / "config.json").write_text("{}")
+    if has_weights:
+        (model_dir / "model.safetensors").touch()
+    monkeypatch.setenv("FOOTBALL_LOCAL_MODELS_DIR", str(tmp_path))
+    assert local.existing_model_path("mlx-community/Example-4bit") == (
+        model_dir if has_weights else None)
+
+
+# --------------------------------------------------------- halves around the 50
+# Every rule in infer_halves except this one assumes the whole frame is in one half
+# of the field. A sideline camera sits at midfield, so the shot is 30-50-30 and it
+# is not — and forcing one half onto that puts two yard lines forty yards apart
+# onto the same line.
+
+
+def _reading(numbers, end_zone="none_visible"):
+    """A FieldReading carrying just the painted numbers, as (number, x_frac)."""
+    return V.FieldReading(
+        lines=[], landmarks=[], down_marker_number=None,
+        yard_numbers=[
+            V.YardNumber(number=n, x_frac=x, y_frac=0.25,
+                         side="unclear", confidence="certain")
+            for n, x in numbers
+        ],
+        numbers_decrease_toward="unclear", end_zone_at=end_zone,
+        far_sideline_at="top", near_sideline_visible=False,
+        camera_view="sideline_elevated", level="nfl", team_colors=[], notes="",
+    )
+
+
+def test_numbers_either_side_of_the_50_land_in_different_halves():
+    """The failure that cost every anchor frame of an NFL broadcast: one half was
+    forced onto a frame that straddles the 50, putting yard lines forty yards
+    apart onto the same line."""
+    r = _reading([(30, 0.2), (40, 0.35), (50, 0.51), (40, 0.68), (30, 0.82)])
+    notes = V.infer_halves(r)
+
+    by_x = sorted(r.yard_numbers, key=lambda n: n.x_frac)
+    assert [n.side for n in by_x] == [
+        "left_half", "left_half", "unclear", "right_half", "right_half"], notes
+
+    # Which is the whole point: five distinct yard lines, forty yards apart.
+    xs = [V.field_x_for(n.number, n.side) for n in by_x]
+    assert xs == [40.0, 50.0, 60.0, 70.0, 80.0]
+    assert max(xs) - min(xs) == 40.0
+
+
+def test_a_symmetric_pair_is_no_longer_collapsed_onto_one_line():
+    """Without the 50 to split on, [40, 40] is neither rising nor falling, and the
+    sequence rule gives up. With it, the pair is twenty yards apart."""
+    r = _reading([(40, 0.3), (50, 0.5), (40, 0.7)])
+    V.infer_halves(r)
+    xs = sorted(V.field_x_for(n.number, n.side)
+                for n in r.yard_numbers if n.number != 50)
+    assert xs == [50.0, 70.0], "the two 40s are the same yard line again"
+
+
+def test_the_50_split_beats_a_visible_end_zone():
+    """An end zone says the frame is in one half. Numbers straddling the 50 say it
+    is not, and that is the more direct evidence — it is about these very numbers."""
+    r = _reading([(40, 0.3), (50, 0.5), (40, 0.7)], end_zone="left")
+    notes = V.infer_halves(r)
+    assert "split at the 50" in notes[0]
+    by_x = sorted(r.yard_numbers, key=lambda n: n.x_frac)
+    assert by_x[-1].side == "right_half"
+
+
+def test_numbers_all_on_one_side_of_the_50_still_use_the_old_rule():
+    """The 50-split must not fire when the frame really is in one half: a 50 at the
+    edge with 40 and 30 running away from it is one half, and both rules agree."""
+    r = _reading([(50, 0.2), (40, 0.5), (30, 0.8)])
+    V.infer_halves(r)
+    assert [n.side for n in r.yard_numbers if n.number != 50] == ["right_half"] * 2
+    xs = sorted(V.field_x_for(n.number, n.side) for n in r.yard_numbers)
+    assert xs == [60.0, 70.0, 80.0]
+
+
+def test_a_frame_with_no_50_is_untouched_by_the_split():
+    r = _reading([(20, 0.3), (30, 0.6)])
+    notes = V.infer_halves(r)
+    assert not any("split at the 50" in n for n in notes)
+    assert all(n.side == "left_half" for n in r.yard_numbers)
+
+
+def _two_row_reading(far, near):
+    """Painted numbers in both sideline rows, as (number, x_frac) lists."""
+    return V.FieldReading(
+        lines=[], landmarks=[], down_marker_number=None,
+        yard_numbers=(
+            [V.YardNumber(number=n, x_frac=x, y_frac=0.25, side="unclear",
+                          confidence="certain") for n, x in far]
+            + [V.YardNumber(number=n, x_frac=x, y_frac=0.80, side="unclear",
+                            confidence="certain") for n, x in near]
+        ),
+        numbers_decrease_toward="unclear", end_zone_at="none_visible",
+        far_sideline_at="top", near_sideline_visible=True,
+        camera_view="sideline_elevated", level="nfl", team_colors=[], notes="",
+    )
+
+
+def test_two_sideline_rows_are_not_read_as_one_interleaved_sequence():
+    """A field paints each number twice. [20, 30, 40] along the far sideline with a
+    single 30 near the camera sorts by x into [20, 30, 40, 30] — which rises and
+    falls, and cost a whole frame on the NFL broadcast."""
+    r = _two_row_reading(far=[(20, 0.2), (30, 0.5), (40, 0.8)], near=[(30, 0.6)])
+    notes = V.infer_halves(r)
+
+    assert not any("do not run in one direction" in n for n in notes), notes
+    assert all(n.side == "left_half" for n in r.yard_numbers), notes
+
+
+def test_a_row_that_genuinely_doubles_back_is_still_refused():
+    """The guard has to keep working: a single row that rises then falls is a bad
+    read, not two rows, and forcing a half onto it would be an invention."""
+    r = _two_row_reading(far=[(20, 0.2), (40, 0.5), (30, 0.8)], near=[])
+    notes = V.infer_halves(r)
+    assert any("do not run in one direction" in n for n in notes), notes
+    assert all(n.side == "unclear" for n in r.yard_numbers)
+
+
+def test_rows_are_split_the_same_way_the_field_y_split_does_it():
+    """Two functions disagreeing about how many rows a frame has would be worse
+    than either answer, so they share the threshold."""
+    one = _two_row_reading(far=[(20, 0.2), (30, 0.5)], near=[])
+    assert len(V._number_rows(one.yard_numbers)) == 1
+    two = _two_row_reading(far=[(20, 0.2)], near=[(20, 0.3)])
+    assert len(V._number_rows(two.yard_numbers)) == 2
+
+
+def test_a_50_with_no_40_beside_it_is_not_trusted_to_split_the_halves():
+    """On this project's NFL clip the model returned a 50 at the middle of the
+    frame, "certain", in three reads out of four, and there is no 50 on that field
+    — it was reading the "1ST & 10" caption. Acted on, that scatters real numbers
+    across both halves, forty yards apart. Walking away from a real 50 the next
+    number is always a 40, so a 30 directly beside it gives the lie away."""
+    r = _reading([(30, 0.27), (50, 0.51), (30, 0.72)])
+    # 30 immediately either side of the claimed 50: impossible on a real field.
+    notes = V.infer_halves(r)
+    assert not any("split at the 50" in n for n in notes), notes
+
+
+def test_a_50_flanked_by_a_40_is_still_trusted():
+    """The guard must not throw away the real case it was built for."""
+    r = _reading([(30, 0.2), (40, 0.35), (50, 0.51), (40, 0.68), (30, 0.82)])
+    notes = V.infer_halves(r)
+    assert any("split at the 50" in n for n in notes), notes
+    by_x = sorted(r.yard_numbers, key=lambda n: n.x_frac)
+    assert [n.side for n in by_x] == [
+        "left_half", "left_half", "unclear", "right_half", "right_half"]
+    xs = [V.field_x_for(n.number, n.side) for n in by_x]
+    assert xs == [40.0, 50.0, 60.0, 70.0, 80.0]

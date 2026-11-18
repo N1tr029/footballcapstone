@@ -1,7 +1,7 @@
 # apps/api
 
-HTTP service for the Hindsight replay app. It serves the files other streams
-already write and adds no data of its own:
+HTTP service for replay and video analysis. It serves exported plays and model
+reviews, and runs uploaded footage through the tracking pipeline:
 
 - **Plays**: Hindsight's play JSON (schemaVersion 1, see
   `packages/replay-engine/hindsight` README), from
@@ -9,6 +9,13 @@ already write and adds no data of its own:
 - **Model reviews**: `packages/counterfactual/reports/decisions.jsonl`, converted
   to the roles.md `Recommendation` shape by
   `gridiron_counterfactual.recommendation.from_report`.
+- **Video analysis**: `/video/uploads` starts automatic analysis by default:
+  field calibration, detector-seeded SAM 2 identities, backward crossing checks,
+  ball/pass inference and optional jersey OCR. Poll `analysisJobId`, then consume
+  Hindsight replay JSON or model inference. Optional assisted routes, Big Data
+  Bowl CSV/rows and browser replay/ball previews remain available.
+  The [frontend integration guide](../../docs/video-analysis-api.md) includes the
+  request sequence, JSON shape, setup and a checked example for developing the UI.
 
 ## Run
 
@@ -20,6 +27,18 @@ uvicorn api.main:app --reload
 ```
 
 Open http://localhost:8000/docs to try every endpoint.
+
+For video analysis, use the root-based setup in the
+[frontend guide](../../docs/video-analysis-api.md). `GET /video` discovers the
+video routes. `GET /video/examples/nfl_sf_sea/tracking.csv` and
+`GET /video/examples/nfl_sf_sea/tracking` return CSV and Hindsight play JSON on a fresh
+checkout, without downloading models. Video code currently lives on `carrier-ball`;
+it must be merged before a checkout of `main` will expose these routes.
+`GET /video/examples/nfl_sf_sea_auto/tracking` serves the separate automatic example.
+Video replay JSON retains every known roster actor on every frame. Missing
+positions are interpolated between sightings, or briefly coasted to a remembered
+position. Teams stay fixed and `observed`/`trackingStatus` distinguish filled
+positions. Original observation data remains available for model analysis.
 
 ## Point Hindsight at it
 

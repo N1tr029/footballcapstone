@@ -1,0 +1,217 @@
+{
+  "name": "nfl_sf_sea",
+  "video": "data/clips/yt/nfl_sf_sea.mp4",
+  "start": 1575,
+  "stop": 1865,
+  "step": 1,
+  "snap_frame": 1672,
+  "fps": null,
+  "out_fps": 12,
+  "distance_yards": 10.0,
+  "title": "49ers at Seahawks (NFL 2026 wk5) - sideline broadcast",
+  "notes": "Assisted example: checked calibration, 22-player formation at source 1578, reviewed QB/RB identity corrections, throw/catch approximately 1769/1780 (+/-2 source frames). Ball ground path uses attributed possession/interpolated flight; visible airborne pixel evidence remains separate. Full continuous identity accuracy is not established.",
+  "detect": {
+    "weights": "yolo11x.pt",
+    "conf": 0.25,
+    "imgsz": 1280,
+    "device": null,
+    "max_players": null,
+    "field_margin": 4.0,
+    "tiles": 1,
+    "tile_overlap": 0.2,
+    "sideline_cut": true,
+    "merge_iou": 0.55
+  },
+  "register": {
+    "mode": "pinned",
+    "frame": 1575,
+    "level": "nfl",
+    "homography": [
+      [
+        120.60875143653756,
+        -2.796834962465776,
+        -7315.477625959672
+      ],
+      [
+        -2.3030502057771267,
+        -22.176516084638372,
+        1499.4046224173067
+      ],
+      [
+        9.303945897023011e-05,
+        0.015735705304334772,
+        1.0
+      ]
+    ],
+    "model": "mlx:mlx-community/Qwen3.5-9B-4bit",
+    "propagate": true,
+    "min_paint": 1.6,
+    "resnap": true,
+    "min_inliers": 25,
+    "horizon_frac": 0.1,
+    "scan_frames": 8,
+    "candidate_frames": []
+  },
+  "track": {
+    "gate_yards": 2.5,
+    "max_age": 8,
+    "min_hits": 3,
+    "process_noise": 6.0,
+    "measurement_noise": 0.35,
+    "smooth_window": 7,
+    "keep_unlabelled": true,
+    "teams": true,
+    "chroma_only": false,
+    "team_clusters": 2,
+    "team_cost": 0.8,
+    "pre_teams": true,
+    "stitch": true,
+    "stitch_gap_s": 1.2,
+    "stitch_gate": 3.5,
+    "drop_static_sideline": true,
+    "static_yards": 1.0,
+    "sideline_band": 2.0,
+    "ball": false,
+    "ball_tiles": 3,
+    "ball_conf": 0.05,
+    "ball_imgsz": 1536,
+    "ball_weights": null,
+    "ball_class": 32,
+    "carrier": false,
+    "carrier_weights": "data/labels/carrier.joblib",
+    "max_team_players": 11,
+    "full_roster_frame": 1578,
+    "ball_motion": true,
+    "identity_anchors": [
+      {
+        "frame": 1695,
+        "playerId": "p02",
+        "field": [
+          80.3833371317102,
+          29.74270471314707
+        ]
+      },
+      {
+        "frame": 1710,
+        "playerId": "p02",
+        "field": [
+          80.68418324862279,
+          29.779934905847856
+        ]
+      },
+      {
+        "frame": 1730,
+        "playerId": "p02",
+        "field": [
+          82.37543089960566,
+          30.562060094184904
+        ]
+      },
+      {
+        "frame": 1750,
+        "playerId": "p02",
+        "field": [
+          81.92681403312542,
+          31.12772557460981
+        ]
+      },
+      {
+        "frame": 1769,
+        "playerId": "p02",
+        "field": [
+          80.56879258586217,
+          30.955026959635354
+        ]
+      },
+      {
+        "frame": 1695,
+        "playerId": "p07",
+        "field": [
+          80.79499046215001,
+          28.934564615793196
+        ]
+      },
+      {
+        "frame": 1710,
+        "playerId": "p07",
+        "field": [
+          79.1851342729532,
+          30.407949197299384
+        ]
+      },
+      {
+        "frame": 1730,
+        "playerId": "p07",
+        "field": [
+          75.555783025091,
+          31.408849658343442
+        ]
+      },
+      {
+        "frame": 1750,
+        "playerId": "p07",
+        "field": [
+          72.20454448939789,
+          31.258234793387253
+        ]
+      },
+      {
+        "frame": 1769,
+        "playerId": "p07",
+        "field": [
+          70.81466692815063,
+          29.35419236751019
+        ]
+      },
+      {
+        "frame": 1780,
+        "playerId": "p07",
+        "field": [
+          70.49072597050665,
+          29.137254835026866
+        ]
+      },
+      {
+        "frame": 1788,
+        "playerId": "p07",
+        "field": [
+          70.28593058725544,
+          29.154799435666323
+        ]
+      },
+      {
+        "frame": 1800,
+        "playerId": "p07",
+        "field": [
+          69.07813942417648,
+          29.509437570997026
+        ]
+      },
+      {
+        "frame": 1810,
+        "playerId": "p07",
+        "field": [
+          67.72276988194274,
+          31.153479056752854
+        ]
+      }
+    ]
+  },
+  "bdb": {
+    "gameId": 999000001,
+    "playId": 900000,
+    "playDirection": "left",
+    "teamClubs": {
+      "teamA": "SF",
+      "teamB": "SEA",
+      "unknown": "UNK"
+    }
+  },
+  "reviewed_pass": {
+    "throwFrame": 1769,
+    "catchFrame": 1780,
+    "passerId": "p02",
+    "receiverId": "p07",
+    "centerId": "p18"
+  }
+}

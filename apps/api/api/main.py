@@ -19,6 +19,7 @@ from fastapi.responses import FileResponse
 
 from .schema import SCHEMA_VERSION, GameList, GameSummary, PlayDetail, PlayIndex
 from .store import REPO_ROOT, PlayStore
+from .video import router as video_router
 
 # The repo's packages aren't installed during development (see pytest.ini), so make
 # the play model importable from a bare checkout. recommendation.py is pure Python.
@@ -30,9 +31,11 @@ except ImportError:
 
 app = FastAPI(title="Football Capstone API", version="0.1.0")
 # WebGL builds run in a browser on another origin, so they need CORS.
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["GET", "POST"], allow_headers=["*"])
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["GET", "POST"],
+                   allow_headers=["*"], expose_headers=["X-Frame", "X-Width", "X-Height"])
 # Play files are large and repetitive; gzip shrinks them several-fold.
 app.add_middleware(GZipMiddleware, minimum_size=1024)
+app.include_router(video_router)
 
 store = PlayStore()
 

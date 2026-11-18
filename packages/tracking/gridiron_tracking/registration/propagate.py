@@ -112,6 +112,7 @@ class PropagatedRegistration:
         """
         cv2 = _cv2()
         prev_gray = None
+        prev_image = None
         prev_idx = None
         # warp[n] takes a point in frame n back into the anchor frame's pixels.
         to_anchor = np.eye(3)
@@ -124,15 +125,17 @@ class PropagatedRegistration:
 
             if prev_gray is None:
                 prev_gray, prev_idx = gray, i
+                prev_image = img
                 self._H[i] = self.base.H.copy()
                 self.report.registered += 1
                 self.report.hops.append(HopQuality(i, 0, 0, True, "anchor"))
                 continue
 
-            step_H, q = self._hop(prev_gray, gray, i)
+            step_H, q = self._hop(prev_gray, gray, i, prev_image=prev_image, prev_idx=prev_idx)
             if step_H is None:
                 self.report.hops.append(q)
-                prev_gray = gray
+                # Keep the last registered frame as the reference. Advancing only
+                # its pixels would silently omit the unsolved camera motion.
                 continue
 
             # step_H maps previous-frame points to current-frame points. To send a
@@ -149,10 +152,11 @@ class PropagatedRegistration:
             self.report.registered += 1
             self.report.hops.append(q)
             prev_gray, prev_idx = gray, i
+            prev_image = img
 
         return self.report
 
-    def _hop(self, prev_gray, gray, idx: int):
+    def _hop(self, prev_gray, gray, idx: int, *, prev_image=None, prev_idx=None):
         cv2 = _cv2()
         h, w = prev_gray.shape[:2]
 
@@ -161,7 +165,17 @@ class PropagatedRegistration:
         # of useless corners.
         mask = np.zeros((h, w), np.uint8)
         mask[int(h * self.horizon_frac):, :] = 255
-        for (x1, y1, x2, y2) in self.mask_boxes.get(idx, []):
+        if prev_image is not None:
+            from .lines import turf_mask
+            # Screen-fixed scoreboards can supply more corners than the moving
+            # grass. A high inlier count on those corners describes the TV overlay,
+            # not the camera. Select features on the actual playing surface.
+            mask = cv2.bitwise_and(mask, turf_mask(prev_image))
+            # White statistics drawn directly over grass survive a turf mask.
+            # Keep the central field for camera motion; the lower TV caption band
+            # stays fixed while the grass pans behind it.
+            mask[int(h * 0.8):] = 0
+        for (x1, y1, x2, y2) in self.mask_boxes.get(prev_idx if prev_idx is not None else idx, []):
             cv2.rectangle(mask, (int(x1) - 6, int(y1) - 6), (int(x2) + 6, int(y2) + 6), 0, -1)
 
         p0 = cv2.goodFeaturesToTrack(

@@ -99,12 +99,14 @@ def find_yard_lines(
     max_lines: int = 40,
     merge_px: float = 22.0,
     min_support: float = 80.0,
+    min_vertical_ratio: float = 0.4,
 ) -> list[FieldLine]:
     """Yard lines, left to right, as they cross the visible field.
 
-    Yard lines run across the field and so appear steep in any sideline view; the
-    sidelines themselves run along it and appear shallow. Filtering on angle keeps
-    the two apart without knowing anything about the camera.
+    Yard lines run across the field and appear diagonal in sideline views; the
+    sidelines themselves run along it and appear much shallower. Keep diagonals
+    down to about 22 degrees: a 50-degree cutoff discarded the 30 and 25 on a real
+    NFL broadcast even though their paint was clear.
 
     The line detector returns fragments, not lines — a yard line broken by players,
     worn paint and mown stripes comes back as a dozen pieces with a median length of
@@ -138,7 +140,7 @@ def find_yard_lines(
         length = float(np.hypot(dx, dy))
         if length < min_length_px:
             continue
-        if abs(dy) < abs(dx) * 1.2:            # shallow: a sideline, not a yard line
+        if abs(dy) < abs(dx) * min_vertical_ratio:
             continue
         if y1 > y2:
             x1, y1, x2, y2 = x2, y2, x1, y1

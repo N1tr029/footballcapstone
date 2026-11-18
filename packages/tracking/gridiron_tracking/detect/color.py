@@ -154,6 +154,23 @@ def torso_color(image, det: Detection, shrink: float = 0.30,
     return np.median(lab, axis=0)
 
 
+def kit_color(image, det: Detection) -> np.ndarray | None:
+    """Torso colour plus pants chroma: white numbers must not erase a navy kit.
+
+    Pants lightness is omitted because both teams can have bright pants; their
+    chroma still distinguishes gold from gray when a shadow darkens a white top.
+    """
+    torso = torso_color(image, det)
+    if torso is None:
+        return None
+    # Reuse the same turf-rejecting sampler, with its torso window translated to
+    # the waist/thigh portion of the original box.
+    pants = Detection(frame=det.frame, x1=det.x1, x2=det.x2,
+                      y1=det.y1 + det.height * .28, y2=det.y2 + det.height * .28)
+    lower = torso_color(image, pants, shrink=.25)
+    return np.concatenate([torso, 2 * (lower[1:] if lower is not None else torso[1:])])
+
+
 def cluster_teams(
     samples: dict[str, list[np.ndarray]],
     k: int = 2,
@@ -178,6 +195,7 @@ def cluster_teams(
         return {t: 0 for t in track_ids}, reps[:1]
 
     crit = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 50, 0.5)
+    cv2.setRNGSeed(seed)
     _, labels, centres = cv2.kmeans(reps, k, None, crit, 8, cv2.KMEANS_PP_CENTERS)
     return {t: int(l) for t, l in zip(track_ids, labels.ravel())}, centres
 

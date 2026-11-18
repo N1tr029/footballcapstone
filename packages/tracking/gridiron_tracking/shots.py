@@ -57,6 +57,34 @@ CUT_DISTANCE = 0.35
 MIN_SHOT_FRAMES = 8
 
 
+def play_window(path,shot,maximum_seconds=20):
+    """Bound memory on long shots around their strongest field motion.
+
+    Sample streaming at 2 Hz. Eight seconds before the strongest motion usually
+    includes the set formation; this remains a shot-selection heuristic, and snap
+    detection downstream must independently establish the actual play clock.
+    """
+    if shot.seconds<=maximum_seconds:
+        return shot.start_frame,shot.end_frame+1
+    import cv2
+    cap=cv2.VideoCapture(str(path));previous=None;samples=[]
+    try:
+        for f in range(shot.start_frame,shot.end_frame+1,max(1,round(shot.fps/2))):
+            cap.set(cv2.CAP_PROP_POS_FRAMES,f);ok,image=cap.read()
+            if not ok:
+                break
+            gray=cv2.cvtColor(cv2.resize(image,(320,180)),cv2.COLOR_BGR2GRAY)[25:140].astype(np.float32)
+            if previous is not None:
+                samples.append((float(np.mean(np.abs(gray-previous))),f))
+            previous=gray
+    finally:
+        cap.release()
+    peak=max(samples)[1] if samples else (shot.start_frame+shot.end_frame)//2
+    length=round(maximum_seconds*shot.fps)
+    start=min(max(shot.start_frame,peak-round(8*shot.fps)),shot.end_frame+1-length)
+    return start,min(shot.end_frame+1,start+length)
+
+
 @dataclass
 class Shot:
     """One continuous camera, described by numbers cheap enough to compute streaming."""
@@ -73,6 +101,8 @@ class Shot:
     motion: float = 0.0     # mean absolute inter-frame change, 0-1
     brightness: float = 0.0
     cut_in: float = 0.0     # how hard the cut into this shot was
+    field_grid: float = 0.0  # spread of turf below the measured field horizon
+    field_blob: float = 1.0  # foreground occlusion in that same region
 
     @property
     def n_frames(self) -> int:
@@ -115,8 +145,6 @@ class Shot:
         are grass, and what distinguishes them is a graphic wipe and a frame rate that
         are not in these features. Expect replays in the hits.
         """
-        spread = np.clip((self.grid - 0.55) / 0.20, 0.0, 1.0)
-        clear = np.clip((0.45 - self.blob) / 0.20, 0.0, 1.0)
         moving = np.clip(self.motion / 0.04, 0.0, 1.0)
         # Long is fine; a play plus its aftermath runs 20s. A minute is a stoppage.
         length = np.clip((self.seconds - 2.0) / 2.0, 0.0, 1.0) * np.clip(
@@ -126,17 +154,41 @@ class Shot:
         # play that is merely acceptable on three features scored 0.5 x 0.5 x 0.5 = 0.12
         # and was thrown away. The root keeps "any zero kills it" while letting a shot
         # that is middling everywhere score middling rather than near nothing.
-        parts = np.array([spread, clear, moving, length], dtype=float)
-        if (parts <= 0).any():
-            return 0.0
-        return float(np.exp(np.log(parts).mean()))
+        scores=[]
+        for grid,blob in ((self.grid,self.blob),(self.field_grid,self.field_blob)):
+            spread=np.clip((grid-.55)/.20,0.,1.)
+            clear=np.clip((.45-blob)/.20,0.,1.)
+            parts=np.array([spread,clear,moving,length],dtype=float)
+            scores.append(float(np.exp(np.log(parts).mean())) if (parts>0).all() else 0.)
+        return max(scores)
 
     def why(self) -> str:
         return (f"turf {self.turf:.2f}  grid {self.grid:.2f}  blob {self.blob:.2f}  "
                 f"{self.seconds:4.1f}s  motion {self.motion:.3f}  score {self.playlike():.2f}")
 
 
-def _descriptors(path: str | Path, stride: int = 1) -> Iterator[tuple[int, np.ndarray, float, float, float]]:
+def field_region(is_turf):
+    """Measure the field beneath a horizon, rather than counting the stadium.
+
+    Keep foreground people in the crop: a large coach/crowd still vetoes it.
+    Never promote a thin sliver of turf into a full usable field view.
+    """
+    import cv2
+    height=is_turf.shape[0]
+    runs=np.convolve((is_turf.mean(axis=1)>.4).astype(float),np.ones(4)/4,mode="valid")
+    starts=np.flatnonzero(runs>=.75)
+    if not len(starts):return 0.,1.
+    start=int(starts[0]);field=is_turf[start:]
+    if len(field)<height*.15:return 0.,1.
+    rows=np.array_split(field,4,axis=0)
+    cells=[cell.mean() for row in rows for cell in np.array_split(row,4,axis=1)]
+    grid=float(np.mean(np.asarray(cells)>.5))
+    count,_,stats,_=cv2.connectedComponentsWithStats((~field).astype(np.uint8),8)
+    blob=float(stats[1:,cv2.CC_STAT_AREA].max()/field.size) if count>1 else 0.
+    return grid,blob
+
+
+def _descriptors(path: str | Path, stride: int = 1) -> Iterator[tuple[int, np.ndarray, float, float, float, float, float, float, float]]:
     """Frame index, hue histogram, turf fraction, brightness, motion — one frame at a time.
 
     The frame itself never leaves this function. That is the whole design constraint.
@@ -179,7 +231,8 @@ def _descriptors(path: str | Path, stride: int = 1) -> Iterator[tuple[int, np.nd
             grey = small.mean(axis=2)
             motion = 0.0 if prev_small is None else float(np.mean(np.abs(grey - prev_small)) / 255.0)
             prev_small = grey
-            yield i, hist, turf, bright, motion, grid, blob
+            field_grid,field_blob=field_region(is_turf)
+            yield i, hist, turf, bright, motion, grid, blob,field_grid,field_blob
     finally:
         cap.release()
 
@@ -213,6 +266,7 @@ def segment(path: str | Path, fps: float | None = None,
                 index=len(shots), start_frame=start, end_frame=end_i, fps=fps,
                 turf=float(a[:, 0].mean()), turf_sd=float(a[:, 0].std()),
                 grid=float(a[:, 3].mean()), blob=float(a[:, 4].mean()),
+                field_grid=float(a[:,5].mean()),field_blob=float(a[:,6].mean()),
                 brightness=float(a[:, 1].mean()),
                 # the first frame of a shot has no predecessor inside it
                 motion=float(a[1:, 2].mean()) if len(a) > 1 else 0.0,
@@ -222,7 +276,7 @@ def segment(path: str | Path, fps: float | None = None,
         start = end_i + 1
         cut_in = next_cut
 
-    for i, hist, turf, bright, motion, grid, blob in _descriptors(path):
+    for i, hist, turf, bright, motion, grid, blob,field_grid,field_blob in _descriptors(path):
         last_i = i
         if prev_hist is not None:
             # Bhattacharyya: 0 identical, 1 disjoint. Robust to the brightness swings a
@@ -232,7 +286,7 @@ def segment(path: str | Path, fps: float | None = None,
             if d >= cut_distance:
                 close(i - 1, d)
         prev_hist = hist
-        cur.append((turf, bright, motion, grid, blob))
+        cur.append((turf, bright, motion, grid, blob,field_grid,field_blob))
     close(last_i, 0.0)
     return shots
 

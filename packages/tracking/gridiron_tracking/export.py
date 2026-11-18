@@ -2,9 +2,9 @@
 
 Two files per play, because two different things want it.
 
-``<play>.csv`` is one row per player per frame — the shape every public tracking
-release uses, which means anything already written against Big Data Bowl data reads
-it without changes. This is what a model trains on.
+``<play>.csv`` is the internal analysis table, one row per player per frame.
+For the exact Big Data Bowl 2025 column names and angle convention, use
+``gridiron_tracking.bdb.write_play``; this analysis CSV is not that public schema.
 
 ``<play>.json`` is the whole play as one object: roster, frames, events, and the
 interaction layer (possession, blocks, tackles, evades). This is what a renderer
@@ -43,7 +43,7 @@ CSV_COLUMNS = [
 
 
 def to_dataframe(track: PlayTrack, interactions: Interactions | None = None) -> pd.DataFrame:
-    """One row per player per frame, in the column order public releases use.
+    """One row per player per frame in the internal analysis layout.
 
     ``side`` and ``has_ball`` are the two columns a raw release does not have and
     every consumer immediately wants: which way this player was going, and whether he

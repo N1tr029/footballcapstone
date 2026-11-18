@@ -63,6 +63,9 @@ class YoloDetector:
         self.model = YOLO(weights)
         self.conf = conf
         self.imgsz = imgsz
+        if device is None:
+            import torch
+            device="cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
         self.device = device
         self.registration = registration
         self.field_margin = field_margin

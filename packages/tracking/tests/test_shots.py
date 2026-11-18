@@ -80,3 +80,22 @@ def test_memory_does_not_grow_with_length(tmp_path):
     # a descriptor is a handful of floats plus a 192-bin histogram, never a frame
     assert first[1].size == 24 * 8
     assert all(np.isscalar(x) or isinstance(x, float) for x in (first[2], first[3], first[4]))
+
+
+def test_low_camera_field_is_not_rejected_for_showing_stadium_above_it():
+    turf=np.zeros((90,160),bool);turf[64:]=True
+    grid,blob=shots.field_region(turf)
+    assert grid>.75 and blob<.1
+    shot=shots.Shot(0,0,185,30,grid=.25,blob=.65,motion=.03,
+        field_grid=grid,field_blob=blob)
+    assert shot.playlike()>.45
+
+
+def test_field_region_does_not_hide_a_large_foreground_person_or_tiny_turf_sliver():
+    turf=np.zeros((90,160),bool);turf[45:]=True;turf[45:,:85]=False
+    grid,blob=shots.field_region(turf)
+    assert blob>.45
+    shot=shots.Shot(0,0,185,30,grid=.25,blob=.65,motion=.03,field_grid=grid,field_blob=blob)
+    assert shot.playlike()==0
+    turf[:]=False;turf[84:]=True
+    assert shots.field_region(turf)==(0.,1.)

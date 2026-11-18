@@ -53,18 +53,110 @@ from typing import Any, Literal
 import numpy as np
 
 from .. import field as fieldmod
+from .local import DEFAULT_MODEL
 
-MODEL = "claude-opus-5"
+MODEL = f"mlx:{DEFAULT_MODEL}"
 GEMINI_MODEL = "gemini-flash-latest"
+QWEN_MODEL = "qwen3-vl-plus"
+QWEN_BASE_URL = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
+"""DashScope's OpenAI-compatible endpoint, and a last resort rather than the one to
+use.
+
+**Set ``DASHSCOPE_BASE_URL`` instead.** A workspace now gets its own inference domain,
+shown beside the key when it is created and looking like
+``https://ws-<id>.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1``. That is the
+one to put in ``.env``: the shared ``dashscope.aliyuncs.com`` host this falls back to
+went into maintenance on 30 September 2026 and takes no new features, so a model added
+after that date can 404 here while working perfectly on the workspace domain — which
+presents as the model being unavailable rather than as the URL being stale.
+
+Regions do not mix either. This is the Singapore host, the Beijing one is
+``dashscope.aliyuncs.com``, and a key only works against the region it was issued for.
+"""
+
+FALLBACKS: dict[str, tuple[str, ...]] = {
+    "gemini-flash-latest": ("gemini-3-flash-preview",),
+    "gemini-pro-latest": ("gemini-flash-latest", "gemini-3-flash-preview"),
+}
+"""Where to go when a model name is up but the model behind it is not.
+
+Liveness, not quality — but the two cannot be separated as cleanly as that sounds,
+and getting it wrong here is worse than having no fallback at all.
+
+The need is real. A hosted frontier model returns 503 under load often enough that on
+a 150-frame clip it is the normal case rather than the exception, and a registration
+that gives up on the first 503 fails the whole clip for a reason that has nothing to
+do with the footage: nine of nine anchor frames on a 1080p NFL broadcast failed that
+way, seven to 503 and two to a truncated answer.
+
+What is NOT in this chain is the point of it. ``gemini-flash-lite-latest`` was the
+first fallback here, on the strength of answering when the others would not. Read
+against a frame whose painted numbers were checked by hand — a 40 and a 30, no 50
+anywhere — it returned a 50 at the middle of the frame marked "certain" on four reads
+out of four, and read the 40 as a 10. It was reading the "1ST & 10" caption and the
+score bug. ``gemini-3-flash-preview`` read the same frame as 40 at 0.27 and 30 at
+0.68, twice, which is exactly right; plain ``gemini-flash-latest`` misread the 40 but
+invented nothing.
+
+So a model that answers confidently and wrongly is not a fallback, it is a liability,
+and it belongs out of the chain rather than at the end of it. Registration failing is
+recoverable — a person pins the clip. Registration succeeding on a phantom yard line
+puts every player tens of yards from where he stood and nothing downstream notices.
+Anything added here needs checking against a frame someone has read by eye first.
+"""
+
+ATTEMPTS = 3
+"""Tries per model before moving to the next one. Three is enough to ride out a demand
+spike without turning a genuinely dead model into a minute of sleeping."""
+
+BACKOFF_S = 2.0
+"""First retry delay, doubling. Jittered, because every frame of a clip hits the same
+endpoint at the same time and un-jittered backoff keeps them in lockstep."""
 
 # Which backend a model name belongs to. The prompt, the schema and every check are
 # shared: a reader is a model plus a transport, and the only thing worth varying while
 # tuning a prompt is the model.
 def backend_for(model: str) -> str:
     m = (model or "").lower()
+    if m.startswith("mlx:"):
+        return "mlx"
     if m.startswith(("gemini", "models/gemini")):
         return "gemini"
+    if m.startswith(("qwen", "qvq")):
+        return "qwen"
     return "anthropic"
+
+
+# Substrings that mark a failure as "ask again later" rather than "this will never
+# work". Matched against the exception's text because the three SDKs raise three
+# different exception hierarchies for the same HTTP 503, and the status code is not
+# in a consistent attribute across them.
+_TRANSIENT = (
+    "503", "429", "500", "502", "504",
+    "unavailable", "overloaded", "high demand", "rate limit", "resource_exhausted",
+    "timeout", "timed out", "connection reset", "temporarily",
+)
+
+
+def _is_transient(msg: str) -> bool:
+    """Whether a failure is worth retrying.
+
+    Deliberately generous: retrying something permanent costs a few seconds, while
+    treating a demand spike as permanent costs the clip.
+    """
+    m = (msg or "").lower()
+    return any(t in m for t in _TRANSIENT)
+
+
+def _is_bad_argument(msg: str) -> bool:
+    """Whether the service rejected the shape of the request rather than failing it.
+
+    Worth telling apart because it is the one failure a caller can fix by asking for
+    less: an optional knob the model does not support comes back as this, and the
+    answer is to drop the knob rather than to retry or to fall over.
+    """
+    m = (msg or "").lower()
+    return "invalid_argument" in m or "invalid argument" in m or "400" in m
 
 
 # --------------------------------------------------------------------- schema
@@ -98,8 +190,8 @@ try:
             "goal_line", "end_zone_back", "far_sideline", "near_sideline",
             "far_hash_row", "near_hash_row",
         ] = Field(description="Which line this is. A goal line is where the solid end-zone paint begins; an end zone back is the outer edge of that paint. Hash rows are the two dashed lines running down the middle of the field.")
-        p1: list[float] = Field(description="A rough point on this line as [across, down], both FRACTIONS between 0.0 and 1.0 — never pixels. Pick a point near one end of the visible stretch.")
-        p2: list[float] = Field(description="A second rough point on the same line, in the same units, near the other end of the visible stretch. Further apart is better.")
+        p1: list[float] = Field(min_length=2, max_length=2, description="A rough point on this line as [across, down], both FRACTIONS between 0.0 and 1.0 — never pixels. Pick a point near one end of the visible stretch.")
+        p2: list[float] = Field(min_length=2, max_length=2, description="A second rough point on the same line, in the same units, near the other end of the visible stretch. Further apart is better.")
         confidence: Literal["certain", "probable", "guess"] = Field(description="How sure you are this line is what you say it is.")
 
     class FieldReading(BaseModel):
@@ -115,13 +207,13 @@ try:
         camera_view: Literal["sideline_low", "sideline_elevated", "endzone", "corner", "unclear"] = Field(description="Where the camera appears to be. 'sideline_low' means roughly at player height in the stands; 'sideline_elevated' means a press box or high tripod looking down.")
         level: Literal["nfl", "college", "high_school", "unclear"] = Field(description="What level of football. This sets the hash mark spacing, so say 'unclear' rather than guessing — a wrong answer here moves every player sideways.")
         team_colors: list[str] = Field(description="Plain colour names for the two teams' jerseys, e.g. ['white', 'navy']. Empty if you cannot tell them apart.")
-        notes: str = Field(description="Anything that would make registering this frame hard: occlusion, glare, worn paint, a camera that is panning, only part of the field visible.")
+        notes: str = Field(max_length=500, description="Briefly describe anything that would make registering this frame hard: occlusion, glare, worn paint, a camera that is panning, only part of the field visible.")
 
     class FitCheck(BaseModel):
         """The model's verdict on a drawn field model."""
 
         verdict: Literal["good", "close", "wrong"] = Field(description="'good' if the drawn lines sit on the real paint; 'close' if they are within about a line's width; 'wrong' if they are clearly off.")
-        problem: str = Field(description="If not good, what is wrong in plain terms — 'the drawn lines are one yard line to the left', 'the field is too narrow', 'rotated'. Empty string if good.")
+        problem: str = Field(max_length=500, description="If not good, what is wrong in plain terms — 'the drawn lines are one yard line to the left', 'the field is too narrow', 'rotated'. Empty string if good.")
         off_by_yards: float | None = Field(default=None, description="If the drawing looks shifted along the field, roughly how many yards, signed. Null if you cannot tell or it is not a simple shift.")
 
     HAVE_PYDANTIC = True
@@ -191,6 +283,20 @@ across the frame is what tells the software which half of the field it is lookin
 and one number on its own tells it almost nothing. Often none are legible — worn paint, \
 night games, and camera angles all defeat them, and an empty list is the right answer \
 when that is the case. Do not strain to read one.
+
+Report only what is painted on the grass. A televised game has a second set of markings \
+that are not on the field at all: the blue first-down line and the yellow line to gain \
+are drawn into the picture, and so are the down and distance written across the turf, \
+the score bug along the bottom, the network's logo and any sponsor's name. They are \
+composited over the grass and they look exactly like paint. A yard number is painted \
+flat into the turf, so it lies in the plane of the field, it is squashed by the camera \
+angle to the same degree as the yard line beside it, and the far row is upside down \
+because it is painted to be read from the other touchline. Anything standing upright, \
+anything facing the camera squarely, anything crisp while the paint around it is worn, \
+and anything with a coloured panel behind it is a graphic — leave it out. The digits in \
+"1ST & 10" and in the score bug are the ones most often mistaken for yard numbers, and a \
+10 invented at the middle of the frame from a down-and-distance caption moves every \
+player on the field.
 
 Give every position as a fraction of the image, between 0 and 1: 0.5 means halfway \
 across, or halfway down. Not pixels.
@@ -262,16 +368,64 @@ def _client(client=None):
 
 
 def _ask(client, img, prompt: str, schema, max_tokens: int = 4000,
-         model: str | None = None, **extra) -> VisionResult:
+         model: str | None = None, attempts: int = ATTEMPTS,
+         model_chain: tuple[str, ...] | None = None, **extra) -> VisionResult:
+    """One structured vision call, retried and failed over until something answers.
+
+    The retrying lives here rather than in each backend because it is the same policy
+    for all of them, and because the thing being retried is "read this frame", not
+    "call this endpoint": a 503 from one model and a truncated answer from another are
+    the same event as far as the caller is concerned, and both are fixed by asking
+    again — possibly of a different model.
+
+    Returns the last failure if every attempt fails, so the caller still sees a real
+    diagnosis rather than a generic one.
+    """
+    model = model or os.environ.get("FOOTBALL_VISION_MODEL") or MODEL
+    chain = [model, *(FALLBACKS.get(model, ()) if model_chain is None else model_chain)]
+
+    last = VisionResult(None, "", "no attempt was made")
+    for m in chain:
+        for attempt in range(max(1, attempts)):
+            res = _ask_once(client, img, prompt, schema, max_tokens, m, **extra)
+            if res.reading is not None:
+                return res
+            last = res
+            if not _is_transient(res.error or ""):
+                break  # asking this model again will not change its mind
+            if attempt < attempts - 1:
+                _nap(BACKOFF_S * (2 ** attempt))
+        # Either way, the next model in the chain still gets a turn: a truncated
+        # answer or a model name this key cannot reach is a fact about the model,
+        # not about the frame.
+    return last
+
+
+def _nap(seconds: float) -> None:
+    """Jittered sleep, factored out so a test can silence it."""
+    import random
+    import time
+
+    time.sleep(seconds * (0.5 + random.random()))
+
+
+def _ask_once(client, img, prompt: str, schema, max_tokens: int,
+              model: str, **extra) -> VisionResult:
     """One structured vision call, to whichever backend the model name names.
 
     ``extra`` is passed straight through, which is how a caller adds ``betas=[...]``
-    and ``fallbacks=...`` without this module guessing at a parameter combination it
-    has not verified.
+    and the SDK's own ``fallbacks=...`` without this module guessing at a parameter
+    combination it has not verified. Note that this is a different thing from
+    :func:`_ask`'s ``model_chain``, which is handled here rather than by a provider
+    and never reaches the wire — the two were one name until they collided.
     """
-    model = model or MODEL
-    if backend_for(model) == "gemini":
+    backend = backend_for(model)
+    if backend == "mlx":
+        return _ask_mlx(img, prompt, schema, model=model, max_tokens=max_tokens)
+    if backend == "gemini":
         return _ask_gemini(img, prompt, schema, model=model, max_tokens=max_tokens)
+    if backend == "qwen":
+        return _ask_qwen(img, prompt, schema, model=model, max_tokens=max_tokens)
 
     data, media = _encode(img)
     try:
@@ -328,6 +482,23 @@ def _ask_gemini(img, prompt: str, schema, model: str, max_tokens: int = 4000) ->
         _GEMINI = genai.Client(api_key=key)
 
     data, media = _encode(img)
+    cfg: dict[str, Any] = dict(
+        system_instruction=SYSTEM,
+        response_mime_type="application/json",
+        response_schema=schema,
+        max_output_tokens=max_tokens,
+    )
+    # Thinking tokens are drawn from the same budget as the answer, so a thinking
+    # model given 4000 tokens can spend all of them reasoning and emit 300 characters
+    # of JSON that stop mid-string. That presented as "could not parse the answer",
+    # which reads like a prompt problem and is not one. The reading this prompt asks
+    # for is a transcription of what is in the frame, not a deduction, so there is
+    # nothing here for a thinking budget to buy.
+    try:
+        cfg["thinking_config"] = types.ThinkingConfig(thinking_budget=0)
+    except (AttributeError, TypeError):  # pragma: no cover - older SDK
+        pass
+
     try:
         resp = _GEMINI.models.generate_content(
             model=model,
@@ -335,38 +506,147 @@ def _ask_gemini(img, prompt: str, schema, model: str, max_tokens: int = 4000) ->
                 types.Part.from_bytes(data=base64.b64decode(data), mime_type=media),
                 prompt,
             ],
-            config=types.GenerateContentConfig(
-                system_instruction=SYSTEM,
-                response_mime_type="application/json",
-                response_schema=schema,
-                max_output_tokens=max_tokens,
-            ),
+            config=types.GenerateContentConfig(**cfg),
         )
     except Exception as e:  # noqa: BLE001
-        return VisionResult(None, "", f"{type(e).__name__}: {e}")
+        msg = f"{type(e).__name__}: {e}"
+        # Not every model accepts a thinking budget of zero, and the ones that refuse
+        # do not say which argument they objected to: gemini-flash-lite-latest returns
+        # a bare "Request contains an invalid argument". So the retry cannot look for
+        # the word "thinking" — it has to treat any rejected-argument answer as
+        # possibly this, drop the budget and ask again. Sniffing for "thinking" here
+        # is what turned a working model into a 400 on every frame.
+        if cfg.get("thinking_config") is not None and _is_bad_argument(msg):
+            cfg.pop("thinking_config", None)
+            cfg["max_output_tokens"] = max(max_tokens, 16000)
+            try:
+                resp = _GEMINI.models.generate_content(
+                    model=model,
+                    contents=[
+                        types.Part.from_bytes(data=base64.b64decode(data), mime_type=media),
+                        prompt,
+                    ],
+                    config=types.GenerateContentConfig(**cfg),
+                )
+            except Exception as e2:  # noqa: BLE001
+                return VisionResult(None, "", f"{type(e2).__name__}: {e2}")
+        else:
+            return VisionResult(None, "", msg)
 
+    txt = getattr(resp, "text", "") or ""
     parsed = getattr(resp, "parsed", None)
     if parsed is None:
-        txt = getattr(resp, "text", "") or ""
+        # Say which of the two it was. A budget that ran out and a model that answered
+        # badly both arrive here as a JSONDecodeError, and they want opposite fixes.
+        if _hit_the_token_cap(resp):
+            return VisionResult(
+                None, txt,
+                f"the answer was truncated at the {max_tokens}-token cap",
+            )
         try:
             parsed = schema.model_validate(json.loads(txt))
         except Exception as e:  # noqa: BLE001
             return VisionResult(None, txt, f"could not parse the answer: {type(e).__name__}: {e}")
-    return VisionResult(parsed, str(getattr(resp, "text", "")))
+    return VisionResult(parsed, txt)
+
+
+def _hit_the_token_cap(resp) -> bool:
+    """Whether a Gemini response stopped because it ran out of room."""
+    try:
+        return "MAX_TOKENS" in str(resp.candidates[0].finish_reason or "").upper()
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _ask_qwen(img, prompt: str, schema, model: str, max_tokens: int = 4000) -> VisionResult:
+    """The same prompt and the same schema, through Alibaba's Qwen-VL.
+
+    A third backend earns its place for availability rather than for accuracy. The
+    failure that killed a whole clip was one provider's model being busy, and no
+    amount of retrying against that provider fixes it; a reader on different
+    infrastructure does. It speaks the OpenAI wire protocol, so this is the OpenAI
+    SDK pointed at DashScope rather than a fourth client library.
+    """
+    import os
+
+    try:
+        from openai import OpenAI
+    except ImportError as e:  # pragma: no cover
+        return VisionResult(None, "", f"needs the OpenAI SDK: pip install openai ({e})")
+
+    key = os.environ.get("DASHSCOPE_API_KEY") or os.environ.get("QWEN_API_KEY")
+    if not key:
+        return VisionResult(None, "", "DASHSCOPE_API_KEY is not set")
+
+    base = os.environ.get("DASHSCOPE_BASE_URL", QWEN_BASE_URL)
+    data, media = _encode(img)
+
+    # Qwen honours json_object but not every deployment honours a full json_schema,
+    # and a refused schema comes back as a 400 rather than as a degraded answer. So
+    # the shape goes in the prompt as well, where it costs a few hundred tokens and
+    # works everywhere.
+    shape = json.dumps(schema.model_json_schema(), separators=(",", ":"))
+    asked = f"{prompt}\n\nAnswer with JSON matching this schema exactly:\n{shape}"
+
+    try:
+        resp = OpenAI(api_key=key, base_url=base).chat.completions.create(
+            model=model,
+            max_tokens=max_tokens,
+            response_format={"type": "json_object"},
+            messages=[
+                {"role": "system", "content": SYSTEM},
+                {"role": "user", "content": [
+                    {"type": "image_url",
+                     "image_url": {"url": f"data:{media};base64,{data}"}},
+                    {"type": "text", "text": asked},
+                ]},
+            ],
+        )
+    except Exception as e:  # noqa: BLE001
+        return VisionResult(None, "", f"{type(e).__name__}: {e}")
+
+    txt = (resp.choices[0].message.content or "") if resp.choices else ""
+    if resp.choices and resp.choices[0].finish_reason == "length":
+        return VisionResult(None, txt, f"the answer was truncated at the {max_tokens}-token cap")
+    try:
+        return VisionResult(schema.model_validate(json.loads(txt)), txt)
+    except Exception as e:  # noqa: BLE001
+        return VisionResult(None, txt, f"could not parse the answer: {type(e).__name__}: {e}")
+
+
+def _ask_mlx(img, prompt: str, schema, model: str, max_tokens: int = 4000) -> VisionResult:
+    """Read locally on Apple Silicon, with the same schema and geometry checks."""
+    try:
+        from .local import generate_json
+
+        txt, tokens = generate_json(img, SYSTEM, prompt, schema.model_json_schema(),
+                                    model=model.removeprefix("mlx:"), max_tokens=max_tokens)
+    except Exception as e:  # noqa: BLE001 - actionable setup/runtime errors reach the caller
+        return VisionResult(None, "", f"local vision: {type(e).__name__}: {e}")
+    if tokens >= max_tokens:
+        return VisionResult(None, txt, f"the local answer was truncated at the {max_tokens}-token cap")
+    # Some instruction models wrap otherwise valid JSON in a Markdown fence.
+    cleaned = txt.strip()
+    if cleaned.startswith("```") and cleaned.endswith("```"):
+        cleaned = cleaned.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+    try:
+        return VisionResult(schema.model_validate(json.loads(cleaned)), txt)
+    except Exception as e:  # noqa: BLE001
+        return VisionResult(None, txt, f"could not parse the local answer: {type(e).__name__}: {e}")
 
 
 def read_field(img, client=None, **extra) -> VisionResult:
     """Ask the model what it can see on this field."""
     if not HAVE_PYDANTIC:
         return VisionResult(None, "", "pydantic is required for structured output")
-    return _ask(_client(client), img, READ_PROMPT, FieldReading, **extra)
+    return _ask(client, img, READ_PROMPT, FieldReading, **extra)
 
 
 def check_fit(img_with_overlay, client=None, **extra) -> VisionResult:
     """Show the model the fitted field model and ask whether it lands on the paint."""
     if not HAVE_PYDANTIC:
         return VisionResult(None, "", "pydantic is required for structured output")
-    return _ask(_client(client), img_with_overlay, CHECK_PROMPT, FitCheck, **extra)
+    return _ask(client, img_with_overlay, CHECK_PROMPT, FitCheck, **extra)
 
 
 # ------------------------------------------------------- semantics to geometry
@@ -408,6 +688,46 @@ def infer_halves(reading) -> list[str]:
     if not nums:
         return notes
 
+    # A 50 with numbers on both sides of it settles the halves outright, and has to be
+    # tried before anything else, because this is the one case where the frame is not
+    # all in one half and every rule below assumes it is.
+    #
+    # It is also the case a sideline broadcast hits constantly: the camera sits at
+    # midfield, so the shot is 30-50-30 and the numbers do not run in one direction at
+    # all. Forcing one half onto that pair of 30s puts two yard lines forty yards apart
+    # onto the same line, which is how a reading with ten good correspondences fits to a
+    # folded field spanning ten yards. Measured on an NFL broadcast: every anchor frame
+    # failed this way, and splitting at the 50 turns the same read into three distinct
+    # yard lines spanning forty yards.
+    fifty = next((n for n in nums if n.number == 50), None)
+    if fifty is not None:
+        lo = [n for n in nums if n.number != 50 and n.x_frac < fifty.x_frac]
+        hi = [n for n in nums if n.number != 50 and n.x_frac > fifty.x_frac]
+        # A 50 is the strongest single thing to split on and therefore the most
+        # expensive to get wrong: it sends numbers on either side of it to opposite
+        # halves, forty yards apart. On a televised game the model reads one where
+        # there is none — on this project's NFL clip it returned a 50 at the middle
+        # of the frame, "certain", in three reads out of four, with no 50 on the
+        # field at all; it was reading the down-and-distance caption. So the claim
+        # has to agree with the field before it is acted on. Walking away from the
+        # 50 the next number painted is always a 40, so a 30 or lower sitting
+        # directly beside it means the 50 is not what the software was told it is.
+        if lo and hi and max(lo[-1].number, hi[0].number) >= 40:
+            # Image-left is the low-x end of the field, the same convention the
+            # landmark resolver uses, so the numbers left of the 50 are the low half.
+            changed = [n.number for n in lo if n.side != "left_half"]
+            changed += [n.number for n in hi if n.side != "right_half"]
+            for n in lo:
+                n.side = "left_half"
+            for n in hi:
+                n.side = "right_half"
+            notes.append(
+                f"halves split at the 50: {[n.number for n in lo]} left of it and "
+                f"{[n.number for n in hi]} right of it"
+                + (f"; overruled {changed} which were read otherwise" if changed else "")
+            )
+            return notes
+
     side = None
     ez = getattr(reading, "end_zone_at", "none_visible")
     if ez == "left":
@@ -419,8 +739,16 @@ def infer_halves(reading) -> list[str]:
         non50 = [n for n in nums if n.number != 50]
         if len(non50) < 2:
             return notes
-        rising = sum(1 for a, b in zip(non50, non50[1:]) if b.number > a.number)
-        falling = sum(1 for a, b in zip(non50, non50[1:]) if b.number < a.number)
+        # Per row, not across both of them. A field paints every number twice, once
+        # inside each sideline, so a frame showing both rows gives two independent
+        # left-to-right sequences — and reading them as one interleaved sequence makes
+        # an ordered frame look disordered. [20, 30, 40] along the far sideline with a
+        # single 30 visible near the camera sorts by x into [20, 30, 40, 30], which
+        # rises and falls, and the whole frame was discarded for it.
+        rising = falling = 0
+        for row in _number_rows(non50):
+            rising += sum(1 for a, b in zip(row, row[1:]) if b.number > a.number)
+            falling += sum(1 for a, b in zip(row, row[1:]) if b.number < a.number)
         if rising and falling:
             notes.append("the yard numbers read do not run in one direction; halves left as read")
             return notes
@@ -439,6 +767,26 @@ def infer_halves(reading) -> list[str]:
     notes.append(f"halves set to {side} because {why}"
                  + (f"; overruled {changed} which were read otherwise" if changed else ""))
     return notes
+
+
+def _number_rows(nums: list) -> list[list]:
+    """The painted numbers grouped into the one or two sideline rows they sit in,
+    each row left to right.
+
+    The same split :func:`number_rows` makes for field y, done without a field spec
+    because the only question here is which numbers belong to a common sequence.
+    The 0.12 threshold is shared with it deliberately: two functions disagreeing
+    about how many rows a frame has would be worse than either answer.
+    """
+    if len(nums) < 2:
+        return [list(nums)]
+    ys = [float(n.y_frac) for n in nums]
+    if (max(ys) - min(ys)) < 0.12:
+        return [sorted(nums, key=lambda n: n.x_frac)]
+    split = (min(ys) + max(ys)) / 2.0
+    top = sorted((n for n in nums if n.y_frac < split), key=lambda n: n.x_frac)
+    bottom = sorted((n for n in nums if n.y_frac >= split), key=lambda n: n.x_frac)
+    return [r for r in (top, bottom) if r]
 
 
 def field_x_for(number: int, side: str, numbers_increase_toward: str = "unclear") -> float | None:

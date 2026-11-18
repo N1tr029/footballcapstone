@@ -98,3 +98,18 @@ def test_real_automatic_fixture_recovers_the_defender_near_the_passer():
     assert math.hypot(defender.x-qb.x,defender.y-qb.y)<8
     doc=play_json(raw)
     assert all(len(f["players"])==22 for f in doc["frames"])
+
+
+def test_real_second_clip_repairs_repeated_losses_without_inventing_a_full_roster():
+    from gridiron_tracking.contract import PlayTrack
+    from gridiron_tracking.video_play import play_json
+    path=Path(__file__).resolve().parents[3]/"docs/examples/nw_michigan_auto.track.json"
+    raw=PlayTrack.from_json(json.loads(path.read_text()))
+    assert raw.meta["identity"]["automatic"] and not raw.meta["identity"]["operatorAnchors"]
+    checks=raw.meta["identity"]["reacquisitionChecks"]
+    repeated=[c for c in checks if c["playerId"]=="p15" and c["accepted"]]
+    assert len(repeated)==2 and repeated[0]["stop"]<repeated[1]["start"]
+    assert all(c["earlierSeamIoU"]>=.35 and c["recoveredFrames"] for c in repeated)
+    doc=play_json(raw);ids={p["nflId"] for p in doc["players"]}
+    assert len(ids)==21 and all({p["nflId"] for p in f["players"]}==ids for f in doc["frames"])
+    assert not doc["analysisReady"],"recovered people cannot invent airborne ball evidence for a pass review"

@@ -192,6 +192,20 @@ is about 97.5% after exclusive body matching and individual recovery (previously
 geometry overlap, not identity correctness. A fixed roster
 does not establish 22 continuously accurate trajectories.
 
+A second automatic example from Northwestern/Michigan is also available:
+
+```bash
+curl http://localhost:8000/video/examples/nw_michigan_auto/tracking
+```
+
+It retains 21 identities on all 65 frames, with 1,095 observed and 270 estimated
+player samples. Nine individual backward checks recover 69 missing source
+samples and correct 11 drifted ones, including two separate gaps for `p15`.
+One kit remains unknown. This clip has no accepted ball flight and remains
+`analysisReady:false`; successful player recovery does not establish pass events.
+The [raw track](examples/nw_michigan_auto.track.json) and
+[play JSON](examples/nw_michigan_auto.play.json) are genuine automatic outputs.
+
 The older assisted example remains available for comparison:
 
 ```bash
